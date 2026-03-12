@@ -1,0 +1,9 @@
+{
+  "yt_dlp_path": "yt-dlp.exe",
+  "last_options": {
+    "output_template": "",
+    "format": "mp4",
+    "resolution": "1080",
+    "extra": ""
+  }
+}

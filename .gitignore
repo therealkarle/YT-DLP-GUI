@@ -1,0 +1,6 @@
+# Ignore yt-dlp executable
+yt-dlp.exe
+
+# Ignore media files
+*.mp4
+*.mp3
