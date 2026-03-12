@@ -43,9 +43,12 @@ class YTDLPGui(tk.Tk):
             print(f"Failed to save config: {e}")
 
     def script_dir(self):
-        if hasattr(sys, "_MEIPASS"):
+        # PyInstaller sets a private attribute on sys pointing to the
+        # temporary folder where the bundled files are unpacked.  Pylance
+        # doesnt know about that attribute, so we silence the warning.
+        if hasattr(sys, "_MEIPASS"):  # type: ignore[attr-defined]
             # when packaged by pyinstaller
-            return sys._MEIPASS
+            return sys._MEIPASS  # type: ignore[attr-defined]
         return os.path.dirname(os.path.abspath(__file__))
 
     def find_executable(self, *names):
@@ -200,6 +203,7 @@ class YTDLPGui(tk.Tk):
         ttk.Button(top_frame, text="Run", command=self.on_run).pack(side="left", padx=5)
         ttk.Button(top_frame, text="Cancel", command=self.on_cancel).pack(side="left", padx=5)
         ttk.Button(top_frame, text="Settings", command=self.open_settings).pack(side="left", padx=5)
+        ttk.Button(top_frame, text="Readme", command=self.open_readme).pack(side="left", padx=5)
 
         # Options area
         options_frame = ttk.LabelFrame(self, text="Common options")
@@ -308,6 +312,9 @@ class YTDLPGui(tk.Tk):
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             self.current_proc = proc
+            # stdout is guaranteed when we pass PIPE, but the type stubs mark it
+            # as Optional[TextIO].  Assert to keep Pylance happy.
+            assert proc.stdout is not None
             for line in proc.stdout:
                 self.log(line.rstrip())
             proc.wait()
@@ -325,6 +332,11 @@ class YTDLPGui(tk.Tk):
 
     def open_settings(self):
         SettingsDialog(self)
+
+    def open_readme(self):
+        """Open the yt-dlp GitHub README in the default web browser."""
+        import webbrowser
+        webbrowser.open("https://github.com/yt-dlp/yt-dlp/blob/master/README.md")
 
     def on_cancel(self):
         if self.current_proc and self.current_proc.poll() is None:
@@ -454,6 +466,7 @@ class YTDLPGui(tk.Tk):
                     text=True,
                     cwd=self.script_dir(),
                 )
+                assert proc.stdout is not None
                 for line in proc.stdout:
                     self.log(line.rstrip())
                 proc.wait()
