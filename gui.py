@@ -5,6 +5,9 @@ import os
 import subprocess
 import threading
 import sys
+import urllib.request
+import zipfile
+import shutil
 
 # Configuration handling
 CONFIG_FILENAME = "config.json"
@@ -172,6 +175,149 @@ class YTDLPGui(tk.Tk):
         else:
             self.log("No running process to cancel.")
 
+    # dependency helpers
+    def install_or_update_yt_dlp(self):
+        """Install or update yt-dlp itself.
+
+        This is run in a background thread so the UI remains responsive.
+        """
+        exe_path = self.config.get("yt_dlp_path", "yt-dlp.exe")
+        def worker():
+            if os.path.isfile(exe_path):
+                self.log(f"Updating yt-dlp using executable: {exe_path}")
+                try:
+                    subprocess.check_call([exe_path, "-U"])
+                    self.log("yt-dlp executable updated successfully.")
+                    messagebox.showinfo("Success", "yt-dlp updated via executable.")
+                except Exception as e:
+                    self.log(f"Executable update failed: {e}")
+                    self._pip_install_yt_dlp()
+            else:
+                self._pip_install_yt_dlp()
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _pip_install_yt_dlp(self):
+        deps = ["yt-dlp"]
+        self.log(f"Installing Python package yt-dlp: {', '.join(deps)}")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U"] + deps)
+            self.log("Python package yt-dlp installed/updated successfully.")
+            messagebox.showinfo("Success", "yt-dlp installed via pip.")
+        except Exception as e:
+            self.log(f"Error installing yt-dlp via pip: {e}")
+            messagebox.showerror("Installation error", f"Failed to install yt-dlp:\n{e}")
+
+    def download_yt_dlp_exe(self):
+        """Fetch the latest yt-dlp.exe from GitHub releases and save it next to the script."""
+        url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+        dest = os.path.join(self.script_dir(), "yt-dlp.exe")
+        def worker():
+            self.log(f"Downloading yt-dlp executable from {url}")
+            try:
+                import urllib.request
+                urllib.request.urlretrieve(url, dest)
+                self.log(f"Downloaded yt-dlp.exe to {dest}")
+                messagebox.showinfo("Downloaded", f"yt-dlp.exe saved to:\n{dest}")
+            except Exception as e:
+                self.log(f"Error downloading yt-dlp.exe: {e}")
+                messagebox.showerror("Download error", f"Failed to download yt-dlp.exe:\n{e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def download_devscripts(self):
+        """Download the `devscripts` directory from the yt-dlp repository.
+
+        The directory is extracted into <script_dir>/devscripts and the archive is
+        cleaned up. If a previous copy exists, it is replaced.
+        """
+        archive_url = "https://github.com/yt-dlp/yt-dlp/archive/refs/heads/master.zip"
+        temp_zip = os.path.join(self.script_dir(), "yt-dlp-master.zip")
+        def worker():
+            self.log(f"Downloading devscripts archive from {archive_url}")
+            try:
+                urllib.request.urlretrieve(archive_url, temp_zip)
+                self.log("Archive downloaded")
+                with zipfile.ZipFile(temp_zip, 'r') as z:
+                    members = [m for m in z.namelist() if m.startswith("yt-dlp-master/devscripts/")]
+                    z.extractall(self.script_dir(), members)
+                src = os.path.join(self.script_dir(), "yt-dlp-master", "devscripts")
+                dst = os.path.join(self.script_dir(), "devscripts")
+                if os.path.exists(dst):
+                    shutil.rmtree(dst)
+                shutil.move(src, dst)
+                # cleanup
+                shutil.rmtree(os.path.join(self.script_dir(), "yt-dlp-master"))
+                os.remove(temp_zip)
+                self.log("devscripts directory extracted")
+                messagebox.showinfo("Devscripts", "devscripts folder downloaded and ready.")
+            except Exception as e:
+                self.log(f"Error fetching devscripts: {e}")
+                messagebox.showerror("Download error", f"Failed to fetch devscripts:\n{e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def run_install_deps_script(self):
+        """Download and execute the yt-dlp/devscripts/install_deps.py script.
+
+        The output of the script is streamed to our log window. If the script
+        exits with a non-zero status, the stderr/stdout are shown in the error
+        dialog to help troubleshooting.
+        """
+        raw_url = "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/devscripts/install_deps.py"
+        dest = os.path.join(self.script_dir(), "install_deps.py")
+        toml_url = "https://raw.githubusercontent.com/yt-dlp/yt-dlp/master/pyproject.toml"
+        toml_dest = os.path.join(self.script_dir(), "pyproject.toml")
+        def worker():
+            self.log(f"Fetching install_deps script from {raw_url}")
+            try:
+                urllib.request.urlretrieve(raw_url, dest)
+                self.log(f"Saved install_deps.py to {dest}")
+            except Exception as e:
+                self.log(f"Error downloading install_deps script: {e}")
+                messagebox.showerror("Download error", f"Failed to download install_deps.py:\n{e}")
+                return
+            # also fetch pyproject.toml so the script can find project metadata
+            self.log(f"Fetching pyproject.toml from {toml_url}")
+            try:
+                urllib.request.urlretrieve(toml_url, toml_dest)
+                self.log(f"Saved pyproject.toml to {toml_dest}")
+            except Exception as e:
+                self.log(f"Error downloading pyproject.toml: {e}")
+                # not fatal, script may still work with remote lookup
+
+            # run script and capture output
+            self.log("Running install_deps.py")
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, dest, toml_dest],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=self.script_dir(),
+                )
+                for line in proc.stdout:
+                    self.log(line.rstrip())
+                proc.wait()
+                if proc.returncode == 0:
+                    self.log("install_deps.py finished successfully")
+                    messagebox.showinfo("Dependencies", "External dependencies installed/updated.")
+                else:
+                    self.log(f"install_deps.py returned non-zero exit status {proc.returncode}")
+                    messagebox.showerror("Execution error",
+                                         f"install_deps.py failed with status {proc.returncode}."
+                                         " See log for details.")
+                    # if the failure looks like missing devscripts, offer pip fallback
+                    if proc.returncode != 0:
+                        self.log("Running pip fallback for default extras")
+                        try:
+                            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "yt-dlp[default]"])
+                            self.log("Pip fallback installed yt-dlp[default]")
+                            messagebox.showinfo("Dependencies", "Installed default Python extras via pip.")
+                        except Exception as pip_e:
+                            self.log(f"Pip fallback also failed: {pip_e}")
+            except Exception as e:
+                self.log(f"Error running install_deps.py: {e}")
+                messagebox.showerror("Execution error", f"install_deps.py failed:\n{e}")
+        threading.Thread(target=worker, daemon=True).start()
+
 
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent):
@@ -186,6 +332,14 @@ class SettingsDialog(tk.Toplevel):
         ttk.Entry(self, textvariable=self.path_var, width=50).grid(row=0, column=1, sticky="w", padx=5, pady=5)
         ttk.Button(self, text="Browse...", command=self.browse).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(self, text="OK", command=self.on_ok).grid(row=1, column=1, pady=5)
+
+        # dependency installation buttons
+        # dependency controls (stacked vertically to ensure all buttons are visible)
+        ttk.Label(self, text="Dependencies:").grid(row=2, column=0, sticky="w", padx=5, pady=(10,2))
+        ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=5, column=0, sticky="w", padx=5, pady=2)
+        ttk.Button(self, text="Download yt-dlp.exe", command=self.parent.download_yt_dlp_exe).grid(row=6, column=0, sticky="w", padx=5, pady=2)
 
     def browse(self):
         path = filedialog.askopenfilename(title="Select yt-dlp executable",

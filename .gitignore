@@ -1,6 +1,12 @@
-# Ignore yt-dlp executable
+# Ignore yt-dlp executable and oter yt-dlp related files
 yt-dlp.exe
+install_deps.py
+help.txt
+pyproject.toml
+devscripts/
 
 # Ignore media files
 *.mp4
 *.mp3
+
+
