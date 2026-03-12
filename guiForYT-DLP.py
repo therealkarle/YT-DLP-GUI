@@ -398,18 +398,20 @@ class YTDLPGui(tk.Tk):
             # adjust other fields to match
             self.apply_preset()
         # sponsorblock state and presets
-        # we remember whether the section was enabled separately; when it
-        # was off we still restore the dropdown value but we do *not* open the
-        # frame or apply the settings.
-        sb_enabled = opts.get("sb_enabled", False)
-        self.sb_enabled_var.set(bool(sb_enabled))
+        # we intentionally **do not** restore the saved enabled flag.  the
+        # GUI should always open with SponsorBlock disabled so the checkbox is
+        # always off at start; users check it only when they actually want to
+        # use the feature.  retaining the old flag would keep it on if they
+        # previously had it enabled, which is exactly the behaviour the user
+        # reported and that we want to avoid.
+        self.sb_enabled_var.set(False)
+        # frame is left hidden by default; no need to call toggle_sb_frame().
+
         sbp = opts.get("sb_preset")
         if sbp in self.SB_PRESETS:
             self.sb_preset_var.set(sbp)
-            if self.sb_enabled_var.get():
-                # only apply the preset (and show the frame) if the user had
-                # the feature switched on previously.
-                self.apply_sb_preset()
+            # do not apply the preset automatically – the section is off.
+            # values will be filled once the user enables SponsorBlock.
 
     def toggle_sb_frame(self):
         """Show or hide the SponsorBlock options frame based on the checkbox.
@@ -447,8 +449,11 @@ class YTDLPGui(tk.Tk):
     def apply_sb_preset(self, _=None):
         """Set SponsorBlock fields according to the selected SB_PRESETS entry.
 
-        Automatically enables the SponsorBlock section so that the user can
-        immediately see the resulting values.
+        This updates the mark/remove/title/api values from the named preset.
+        **It does not change the enabled checkbox.**  users commonly want to
+        examine presets without immediately turning the feature on; letting
+        the checkbox stay off keeps SponsorBlock “default off” while still
+        providing a convenient way to fill in the fields.
         """
         name = self.sb_preset_var.get()
         settings = self.SB_PRESETS.get(name, {})
@@ -456,10 +461,9 @@ class YTDLPGui(tk.Tk):
         self.sb_remove_var.set(settings.get("remove", ""))
         self.sb_title_template.set(settings.get("title", ""))
         self.sb_api_var.set(settings.get("api", ""))
-        # enabling frame so the choices are visible
-        if not self.sb_enabled_var.get():
-            self.sb_enabled_var.set(True)
-            self.toggle_sb_frame()
+        # do not toggle sb_enabled_var here; the user must explicitly check the
+        # box to activate SponsorBlock.  this keeps the default state off even
+        # when a non‑None preset is selected.
 
     def collect_options(self):
         opts = []
@@ -517,22 +521,17 @@ class YTDLPGui(tk.Tk):
             "format": self.format_var.get(),
             "resolution": self.resolution_var.get(),
             "extra": extra,
-            # remember whether SB was enabled so we don't auto‑enable it on
-            # the next launch.  dropping this key means "off".
-            "sb_enabled": bool(self.sb_enabled_var.get()),
         }
-        # also remember the preset if it's not the default *and* the feature
-        # was actually enabled.  storing a preset for a disabled section
-        # could otherwise re‑enable SponsorBlock on startup.
+        # we do not record ``sb_enabled`` – the app always starts with
+        # SponsorBlock turned off.  remembering a preset is still useful so
+        # the user can switch on SB and immediately have their preferred
+        # values filled.
         sbp_cur = self.sb_preset_var.get()
-        if self.sb_enabled_var.get() and sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
+        if sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
             self.config["last_options"]["sb_preset"] = sbp_cur
         # also remember the main preset if it's not the default
         if current_preset and current_preset != list(self.PRESETS.keys())[0]:
             self.config["last_options"]["preset"] = current_preset
-        sbp_cur = self.sb_preset_var.get()
-        if sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
-            self.config["last_options"]["sb_preset"] = sbp_cur
         # persist to disk
         self.save_config()
         return opts
