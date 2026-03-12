@@ -32,7 +32,10 @@ class ToolTip:
         tw.wm_geometry(f"+{x}+{y}")
         label = tk.Label(tw, text=self.text, justify="left",
                          background="#ffffe0", relief="solid", borderwidth=1,
-                         font=("tahoma", "8", "normal"))
+                         # Pylance expects the font size as an int; using a tuple
+                         # with (family, size, style) is the normal Tkinter form
+                         # and avoids the earlier type error.
+                         font=("tahoma", 8, "normal"))
         label.pack(ipadx=1)
 
     def hide(self, event=None):
@@ -401,11 +404,19 @@ class YTDLPGui(tk.Tk):
             self.preset_var.set(preset)
             # adjust other fields to match
             self.apply_preset()
-        # sponsorblock presets
+        # sponsorblock state and presets
+        # we remember whether the section was enabled separately; when it
+        # was off we still restore the dropdown value but we do *not* open the
+        # frame or apply the settings.
+        sb_enabled = opts.get("sb_enabled", False)
+        self.sb_enabled_var.set(bool(sb_enabled))
         sbp = opts.get("sb_preset")
         if sbp in self.SB_PRESETS:
             self.sb_preset_var.set(sbp)
-            self.apply_sb_preset()
+            if self.sb_enabled_var.get():
+                # only apply the preset (and show the frame) if the user had
+                # the feature switched on previously.
+                self.apply_sb_preset()
 
     def toggle_sb_frame(self):
         """Show or hide the SponsorBlock options frame based on the checkbox.
@@ -513,11 +524,19 @@ class YTDLPGui(tk.Tk):
             "format": self.format_var.get(),
             "resolution": self.resolution_var.get(),
             "extra": extra,
+            # remember whether SB was enabled so we don't auto‑enable it on
+            # the next launch.  dropping this key means "off".
+            "sb_enabled": bool(self.sb_enabled_var.get()),
         }
-        # also remember the preset if it's not the default
+        # also remember the preset if it's not the default *and* the feature
+        # was actually enabled.  storing a preset for a disabled section
+        # could otherwise re‑enable SponsorBlock on startup.
+        sbp_cur = self.sb_preset_var.get()
+        if self.sb_enabled_var.get() and sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
+            self.config["last_options"]["sb_preset"] = sbp_cur
+        # also remember the main preset if it's not the default
         if current_preset and current_preset != list(self.PRESETS.keys())[0]:
             self.config["last_options"]["preset"] = current_preset
-        # and the sponsorblock preset if non‑default
         sbp_cur = self.sb_preset_var.get()
         if sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
             self.config["last_options"]["sb_preset"] = sbp_cur
@@ -525,29 +544,12 @@ class YTDLPGui(tk.Tk):
         self.save_config()
         return opts
 
-    def on_run(self):
-        url = self.url_var.get().strip()
-        if not url:
-            # no URL supplied, offer the user a demo video link instead
-            if self._ask_demo_url():
-                # user agreed, prepopulate the field so logs/commands are clear
-                url = "https://www.youtube.com/watch?v=QuAaxY7xDwg&t=9s"
-                self.url_var.set(url)
-            else:
-                # nothing to do
-                return
-        cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")]
-        cmd += self.collect_options()
-        cmd.append(url)
-        # enforce critical dependencies are present; pop up error and abort if not
-        if not self.check_dependencies(url):
-            return
-        self.log(f"Executing: {' '.join(cmd)}")
-        # start process in background and keep reference for cancellation
-        self.current_proc = None
-        thread = threading.Thread(target=self.run_subprocess, args=(cmd,))
-        thread.daemon = True
-        thread.start()
+    # NOTE: the original implementation of ``on_run`` is duplicated later
+    # with support for raw-command editing.  keep only the newer version to
+    # avoid the Pylance ``reportRedeclaration`` warning.
+    #
+    # The old definition has been left physically earlier in the file; remove
+    # it entirely so that only the later method exists.
 
     def run_subprocess(self, cmd):
         try:
@@ -591,6 +593,11 @@ class YTDLPGui(tk.Tk):
             self.log_text.configure(state="disabled")
 
     def on_run(self):
+        # ``url`` is referenced later even when raw mode is enabled; define it
+        # upfront so that Pylance knows it always exists and we avoid the
+        # "possibly unbound" warning.
+        url: str = ""
+
         if self.raw_var.get():
             # run exactly what the user typed in the log field
             command_line = self.log_text.get("1.0", "end").strip()
@@ -615,8 +622,12 @@ class YTDLPGui(tk.Tk):
             cmd += self.collect_options()
             cmd.append(url)
         # enforce critical dependencies are present; pop up error and abort if not
-        if not self.check_dependencies("" if self.raw_var.get() else url):
-            return
+        if self.raw_var.get():
+            if not self.check_dependencies(""):
+                return
+        else:
+            if not self.check_dependencies(url):
+                return
         self.log(f"Executing: {' '.join(cmd)}")
         # start process in background and keep reference for cancellation
         self.current_proc = None

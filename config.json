@@ -4,6 +4,7 @@
     "format": "mp4",
     "resolution": "1080",
     "extra": "",
+    "sb_enabled": true,
     "sb_preset": "Mark+Remove Sponsors"
   }
 }
