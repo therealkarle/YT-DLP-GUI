@@ -1,6 +1,5 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import importlib
 import json
 import os
 import platform
@@ -14,18 +13,11 @@ import shlex
 import tempfile
 
 
-# URL used when the GUI automatically fetches ffmpeg binaries from the
-# dependency management dialog. Historically we downloaded the smaller
-# "essentials" build, which lacks certain codecs and – critically – did not
-# include ffprobe.exe.  Users needing SponsorBlock or other postprocessing
-# features would then get errors like "ffprobe not found" even though
-# ffmpeg.exe was present.  Switching to the full static build ensures both
-# ffmpeg and ffprobe are bundled and provides maximum compatibility.
-#
-# The download link comes from gyan.dev; it may be updated as newer releases
-# appear but should always contain the word "full" so tests can detect
-# incorrect URLs.
-FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
+FFMPEG_RELEASE_API_URLS = [
+    "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/latest",
+    "https://api.github.com/repos/yt-dlp/FFmpeg-Builds/releases/latest",
+]
+HTTP_USER_AGENT = "YT-DLP-GUI/1.0"
 
 
 # minimal tooltip helper adapted from numerous examples; shows simple text on
@@ -125,25 +117,36 @@ class YTDLPGui(tk.Tk):
             print(f"Failed to save config: {e}")
 
     def script_dir(self):
-        # PyInstaller sets a private attribute on sys pointing to the
-        # temporary folder where the bundled files are unpacked.  Pylance
-        # doesnt know about that attribute, so we silence the warning.
-        if hasattr(sys, "_MEIPASS"):  # type: ignore[attr-defined]
-            # when packaged by pyinstaller
-            return sys._MEIPASS  # type: ignore[attr-defined]
+        if getattr(sys, "frozen", False):
+            return os.path.dirname(os.path.abspath(sys.executable))
         return os.path.dirname(os.path.abspath(__file__))
 
+    def ffmpeg_dir(self):
+        return os.path.join(self.script_dir(), "ffmpeg")
+
+    def ffmpeg_bin_dir(self):
+        return os.path.join(self.ffmpeg_dir(), "bin")
+
+    def local_ffmpeg_location(self):
+        bin_dir = self.ffmpeg_bin_dir()
+        ffmpeg_path = os.path.join(bin_dir, "ffmpeg.exe")
+        ffprobe_path = os.path.join(bin_dir, "ffprobe.exe")
+        if os.path.isfile(ffmpeg_path) and os.path.isfile(ffprobe_path):
+            return bin_dir
+        return None
+
     def find_executable(self, *names):
+        local_dirs = [self.ffmpeg_bin_dir(), self.script_dir()]
+        for name in names:
+            for local_dir in local_dirs:
+                candidate = os.path.join(local_dir, name)
+                if os.path.isfile(candidate):
+                    return candidate
+
         for name in names:
             path = shutil.which(name)
             if path:
                 return path
-
-        script_dir = self.script_dir()
-        for name in names:
-            candidate = os.path.join(script_dir, name)
-            if os.path.isfile(candidate):
-                return candidate
         return None
 
     def has_ffmpeg(self):
@@ -155,11 +158,10 @@ class YTDLPGui(tk.Tk):
         yt-dlp requires *both* ffmpeg and ffprobe for many postprocessing
         features (SponsorBlock, chapters, subtitles, etc).  The GUI used
         to test only for ``ffmpeg`` which meant the bundled downloader would
-        fetch *ffmpeg.exe* but ignore ``ffprobe.exe``.  As a result SponsorBlock
-        would later fail with "ffprobe not found" even though a working
-        ffmpeg binary existed next to the GUI.  Detecting both lets us warn
-        the user earlier and gives us an opportunity to download both
-        executables.
+        leave the installation incomplete.  As a result SponsorBlock would
+        later fail with "ffprobe not found" even though a working ffmpeg
+        binary existed locally.  Detecting both lets us warn the user earlier
+        and ensures the managed local installation remains complete.
         """
         return self.find_executable("ffprobe", "ffprobe.exe") is not None
 
@@ -171,16 +173,58 @@ class YTDLPGui(tk.Tk):
         # explicitly enable another one.
         return self.find_executable("deno", "deno.exe") is not None
 
-    def get_ffmpeg_download_urls(self):
-        """Return preferred ffmpeg download URLs for the current Windows arch."""
+    def get_ffmpeg_windows_arch(self):
         machine = platform.machine().lower()
         if "arm" in machine and "64" in machine:
-            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl.zip"
+            return "winarm64"
         elif machine in ("x86", "i386", "i686") or sys.maxsize <= 2 ** 32:
-            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win32-gpl.zip"
-        else:
-            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        return [FFMPEG_DOWNLOAD_URL, fallback_zip]
+            return "win32"
+        return "win64"
+
+    def get_ffmpeg_asset_candidates(self):
+        arch = self.get_ffmpeg_windows_arch()
+        return [
+            f"ffmpeg-master-latest-{arch}-gpl-shared.zip",
+            f"ffmpeg-master-latest-{arch}-gpl.zip",
+        ]
+
+    def _download_json(self, url):
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": HTTP_USER_AGENT,
+            },
+        )
+        with urllib.request.urlopen(request) as response:
+            return json.load(response)
+
+    def resolve_ffmpeg_release_asset(self):
+        candidates = self.get_ffmpeg_asset_candidates()
+        last_error = None
+        for api_url in FFMPEG_RELEASE_API_URLS:
+            try:
+                release_data = self._download_json(api_url)
+            except Exception as exc:
+                last_error = exc
+                self.log(f"Error loading FFmpeg release metadata from {api_url}: {exc}")
+                continue
+
+            assets = {asset.get("name", ""): asset for asset in release_data.get("assets", [])}
+            for asset_name in candidates:
+                asset = assets.get(asset_name)
+                if asset and asset.get("browser_download_url"):
+                    return {
+                        "name": asset_name,
+                        "browser_download_url": asset["browser_download_url"],
+                        "source": api_url,
+                    }
+
+        if last_error is not None:
+            raise RuntimeError(f"Failed to resolve FFmpeg release asset: {last_error}")
+        raise FileNotFoundError(
+            "No matching full GPL FFmpeg ZIP asset was found for this Windows architecture."
+        )
 
     def _find_file_in_tree(self, root_dir, filename):
         for current_root, _, files in os.walk(root_dir):
@@ -188,49 +232,68 @@ class YTDLPGui(tk.Tk):
                 return os.path.join(current_root, filename)
         return None
 
-    def _extract_7z_archive(self, archive_path, target_dir):
-        seven_zip = self.find_executable("7z", "7z.exe", "7zr", "7zr.exe")
-        if seven_zip:
-            subprocess.check_call([seven_zip, "x", archive_path, f"-o{target_dir}", "-y"])
-            return
+    def _find_ffmpeg_build_root(self, root_dir):
+        for current_root, dirnames, files in os.walk(root_dir):
+            if "ffmpeg.exe" in files and "ffprobe.exe" in files:
+                return current_root
+            if "bin" not in dirnames:
+                continue
+            bin_dir = os.path.join(current_root, "bin")
+            if os.path.isfile(os.path.join(bin_dir, "ffmpeg.exe")) and os.path.isfile(os.path.join(bin_dir, "ffprobe.exe")):
+                return current_root
+        return None
+
+    def _extract_ffmpeg_archive(self, archive_path, target_dir):
+        archive_name = os.path.basename(archive_path).lower()
+        if not archive_name.endswith(".zip"):
+            raise ValueError(f"Unsupported ffmpeg archive format: {archive_name}")
+
+        with zipfile.ZipFile(archive_path, "r") as archive:
+            archive.extractall(target_dir)
+
+        build_root = self._find_ffmpeg_build_root(target_dir)
+        if not build_root:
+            raise FileNotFoundError("ffmpeg.exe and ffprobe.exe were not found in the downloaded FFmpeg build")
+        return build_root
+
+    def _replace_directory(self, source_dir, target_dir):
+        backup_dir = None
+        if os.path.exists(target_dir):
+            backup_dir = target_dir + ".backup"
+            if os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
+            os.replace(target_dir, backup_dir)
 
         try:
-            py7zr = importlib.import_module("py7zr")
-        except ImportError:
-            self.log("py7zr not installed; installing it to unpack ffmpeg .7z archive...")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "py7zr"])
-            py7zr = importlib.import_module("py7zr")
+            os.replace(source_dir, target_dir)
+        except Exception:
+            if backup_dir and os.path.exists(backup_dir) and not os.path.exists(target_dir):
+                os.replace(backup_dir, target_dir)
+            raise
+        else:
+            if backup_dir and os.path.exists(backup_dir):
+                shutil.rmtree(backup_dir)
 
-        with py7zr.SevenZipFile(archive_path, mode="r") as archive:
-            archive.extractall(path=target_dir)
+    def _remove_legacy_ffmpeg_binaries(self):
+        for filename in ("ffmpeg.exe", "ffprobe.exe", "ffplay.exe"):
+            legacy_path = os.path.join(self.script_dir(), filename)
+            if os.path.isfile(legacy_path):
+                os.remove(legacy_path)
 
-    def _extract_ffmpeg_archive(self, archive_path):
-        """Extract ffmpeg/ffprobe from a downloaded archive into script_dir."""
-        archive_name = os.path.basename(archive_path).lower()
-        with tempfile.TemporaryDirectory() as temp_dir:
-            if archive_name.endswith(".zip"):
-                with zipfile.ZipFile(archive_path, "r") as archive:
-                    archive.extractall(temp_dir)
-            elif archive_name.endswith(".7z"):
-                self._extract_7z_archive(archive_path, temp_dir)
-            else:
-                raise ValueError(f"Unsupported ffmpeg archive format: {archive_name}")
+    def _install_ffmpeg_archive(self, archive_path):
+        with tempfile.TemporaryDirectory(dir=self.script_dir(), prefix="ffmpeg-install-") as work_dir:
+            extract_dir = os.path.join(work_dir, "extract")
+            os.makedirs(extract_dir, exist_ok=True)
+            build_root = self._extract_ffmpeg_archive(archive_path, extract_dir)
+            staged_dir = os.path.join(work_dir, "ffmpeg")
+            shutil.move(build_root, staged_dir)
+            self._replace_directory(staged_dir, self.ffmpeg_dir())
 
-            extracted = []
-            for binary_name in ("ffmpeg.exe", "ffprobe.exe"):
-                source_path = self._find_file_in_tree(temp_dir, binary_name)
-                if not source_path:
-                    continue
-                dest_path = os.path.join(self.script_dir(), binary_name)
-                if os.path.exists(dest_path):
-                    os.remove(dest_path)
-                shutil.move(source_path, dest_path)
-                extracted.append(binary_name)
-
-            if not extracted:
-                raise FileNotFoundError("ffmpeg.exe or ffprobe.exe not found in downloaded archive")
-
-            return extracted
+        self._remove_legacy_ffmpeg_binaries()
+        install_bin_dir = self.local_ffmpeg_location()
+        if not install_bin_dir:
+            raise FileNotFoundError("FFmpeg installation completed but the local bin directory is incomplete")
+        return install_bin_dir
 
     def check_dependencies(self, url):
         """Return True if all required dependencies appear available.
@@ -251,7 +314,7 @@ class YTDLPGui(tk.Tk):
         # alerted early instead of seeing the cryptic yt-dlp error later.
         if not self.has_ffmpeg() and fmt in ("best", "mp4", "mkv", "webm"):
             msg = (
-                "ffmpeg was not found on your system or next to the GUI. "
+                "ffmpeg was not found on your system or in the local ffmpeg folder next to the GUI. "
                 "Without ffmpeg yt-dlp cannot merge separate video+audio streams "
                 "and will often fall back to poor pre‑merged files like 360p. "
                 "Please install ffmpeg from 'Manage dependencies...'."
@@ -264,7 +327,7 @@ class YTDLPGui(tk.Tk):
             # postprocessing helpers such as SponsorBlock, so we surface it
             # regardless of the URL or format.
             msg = (
-                "ffprobe was not found on your system or next to the GUI. "
+                "ffprobe was not found on your system or in the local ffmpeg folder next to the GUI. "
                 "Many yt-dlp features (SponsorBlock, chapters, metadata, etc.) "
                 "require ffprobe to determine the video duration. "
                 "Please install ffmpeg (which includes ffprobe) from "
@@ -799,16 +862,13 @@ class YTDLPGui(tk.Tk):
         if extra:
             opts += extra.split()
 
-        # if we were able to locate an ffmpeg/ffprobe binary outside of PATH, pass
-        # its directory to yt-dlp so postprocessing can find ffprobe.  this
-        # handles the common case where the user installed ffmpeg from the
-        # dependency management dialog; we download the executables next to the GUI but do not modify
-        # the PATH.  always supplying the location is harmless when the tool
-        # can already find the program itself.
-        ffloc = self.find_executable("ffmpeg", "ffmpeg.exe")
-        if ffloc:
-            # yt-dlp accepts either the binary or the containing directory.
-            opts += ["--ffmpeg-location", os.path.dirname(ffloc)]
+        ffmpeg_location = self.local_ffmpeg_location()
+        if not ffmpeg_location:
+            ffloc = self.find_executable("ffmpeg", "ffmpeg.exe")
+            if ffloc:
+                ffmpeg_location = os.path.dirname(ffloc)
+        if ffmpeg_location:
+            opts += ["--ffmpeg-location", ffmpeg_location]
 
         # authentication options: cookies file wins over browser selection
         if self.cookies_file_var.get():
@@ -1047,31 +1107,29 @@ class YTDLPGui(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _download_ffmpeg_binaries_worker(self):
-        """Download a static ffmpeg build and place ffmpeg/ffprobe next to the GUI."""
-        last_error = None
-        for ff_url in self.get_ffmpeg_download_urls():
-            archive_path = None
-            try:
-                self.log(f"Trying ffmpeg source: {ff_url}")
-                archive_path = os.path.join(self.script_dir(), os.path.basename(ff_url))
-                urllib.request.urlretrieve(ff_url, archive_path)
-                extracted = self._extract_ffmpeg_archive(archive_path)
-                self.log(f"Downloaded and extracted: {', '.join(extracted)}")
-                messagebox.showinfo("Dependencies", "ffmpeg and ffprobe downloaded and placed next to GUI.")
-                return True
-            except Exception as ff_e:
-                last_error = ff_e
-                self.log(f"Error downloading ffmpeg from {ff_url}: {ff_e}")
-            finally:
-                if archive_path and os.path.exists(archive_path):
-                    os.remove(archive_path)
-
-        self.log(f"Error downloading ffmpeg: {last_error}")
-        messagebox.showerror("Download error", f"Failed to download ffmpeg/ffprobe:\n{last_error}")
-        return False
+        """Download the latest full FFmpeg build into a local ffmpeg directory."""
+        archive_path = None
+        try:
+            asset = self.resolve_ffmpeg_release_asset()
+            self.log(f"Selected FFmpeg asset {asset['name']} from {asset['source']}")
+            with tempfile.TemporaryDirectory(dir=self.script_dir(), prefix="ffmpeg-download-") as work_dir:
+                archive_path = os.path.join(work_dir, asset["name"])
+                self.log(f"Downloading FFmpeg from {asset['browser_download_url']}")
+                urllib.request.urlretrieve(asset["browser_download_url"], archive_path)
+                install_bin_dir = self._install_ffmpeg_archive(archive_path)
+            self.log(f"FFmpeg installed to {install_bin_dir}")
+            messagebox.showinfo(
+                "Dependencies",
+                f"FFmpeg was installed into:\n{self.ffmpeg_dir()}\n\nThe GUI will now prefer this local full build.",
+            )
+            return True
+        except Exception as ff_e:
+            self.log(f"Error downloading FFmpeg: {ff_e}")
+            messagebox.showerror("Download error", f"Failed to download FFmpeg:\n{ff_e}")
+            return False
 
     def download_ffmpeg_binaries(self):
-        """Download ffmpeg and ffprobe without running the full dependency script."""
+        """Download FFmpeg without running the full dependency script."""
         def worker():
             self._download_ffmpeg_binaries_worker()
 
@@ -1173,7 +1231,7 @@ class YTDLPGui(tk.Tk):
                 messagebox.showerror("Execution error", f"install_deps.py failed:\n{e}")
             # after the script runs attempt to install ffmpeg if missing
             if not self.has_ffmpeg() or not self.has_ffprobe():
-                self.log("ffmpeg not detected; downloading static build...")
+                self.log("Local FFmpeg not detected; downloading a full build...")
                 self._download_ffmpeg_binaries_worker()
             
         threading.Thread(target=worker, daemon=True).start()
@@ -1288,7 +1346,7 @@ class DependenciesDialog(tk.Toplevel):
         add_entry("ffmpeg/ffprobe binaries",
                   lambda: self.parent.has_ffmpeg() and self.parent.has_ffprobe(),
                   self.parent.download_ffmpeg_binaries,
-                  button_text="Download")
+                  button_text="Download local build")
 
         add_entry("devscripts folder",
                   lambda: os.path.isdir(os.path.join(self.parent.script_dir(), "devscripts")),
