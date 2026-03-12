@@ -10,10 +10,13 @@ YTDLPGui = module.YTDLPGui
 td = tempfile.TemporaryDirectory()
 app = YTDLPGui()
 app.script_dir = lambda: td.name
-app.config = {"yt_dlp_path": "yt-dlp.exe", "last_options": {}}
+# simulate previously saved options including cookies
+app.config = {"yt_dlp_path": "yt-dlp.exe", "last_options": {"cookies_file": "foo.txt", "cookies_browser": "chrome"}}
 app.apply_last_options()
 print("after apply_last_options sb_enabled=", app.sb_enabled_var.get(),
       "frame visible=", app.sb_frame.winfo_ismapped())
+print("restored cookies file=", app.cookies_file_var.get(),
+      "browser=", app.cookies_browser_var.get())
 # toggling off manually should hide the frame
 app.sb_enabled_var.set(False)
 print("after explicitly setting False sb_enabled=", app.sb_enabled_var.get(),
@@ -41,6 +44,14 @@ print("after enabling sb manually sb_enabled=", app.sb_enabled_var.get(),
 opts = app.collect_options()
 print("opts:", opts)
 print("sb_enabled inside collect options=", app.sb_enabled_var.get())
+# since cookies_file was supplied in config, it should appear in opts
+print("cookies flag present?", "--cookies" in opts)
+# now test browser-only behaviour
+app.cookies_file_var.set("")
+app.cookies_browser_var.set("firefox")
+opts2 = app.collect_options()
+print("opts2 (browser):", opts2)
+print("cookies-from-browser flag present?", "--cookies-from-browser" in opts2)
 with open(os.path.join(td.name, "config.json"), encoding="utf-8") as f:
     data = json.load(f)
 print("last options:", data.get("last_options"))

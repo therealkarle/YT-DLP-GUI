@@ -48,7 +48,12 @@ class ToolTip:
 CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG = {
     "yt_dlp_path": "yt-dlp.exe",
-    "last_options": {}
+    "last_options": {
+        # previous options saved by collect_options; key names documented in
+        # ``collect_options``.  cookies fields added for authentication.
+        "cookies_file": "",
+        "cookies_browser": "None",
+    }
 }
 
 
@@ -251,10 +256,11 @@ class YTDLPGui(tk.Tk):
         # use the standard library webbrowser module to open the link
         __import__("webbrowser").open(link)
 
-
-        btn = ttk.Button(dlg, text="Close", command=dlg.destroy)
-        btn.pack(pady=(0, 10))
-        self.wait_window(dlg)
+    def browse_cookies(self):
+        path = filedialog.askopenfilename(title="Select cookies file",
+                                           filetypes=[("Text files", "*.txt;*.cookies;*"), ("All files", "*")])
+        if path:
+            self.cookies_file_var.set(path)
 
     def create_widgets(self):
         # URL entry and run button
@@ -299,6 +305,20 @@ class YTDLPGui(tk.Tk):
         ttk.Label(options_frame, text="Resolution:").grid(row=3, column=0, sticky="w")
         resolutions = ["best", "1080", "720", "480", "360", "240"]
         ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=3, column=1, sticky="w")
+
+        # authentication options (cookies)
+        # users frequently need to supply a cookies file or pull from a browser
+        self.cookies_file_var = tk.StringVar()
+        ttk.Label(options_frame, text="Cookies file:").grid(row=4, column=0, sticky="w")
+        ttk.Entry(options_frame, textvariable=self.cookies_file_var, width=40).grid(row=4, column=1, sticky="w")
+        ttk.Button(options_frame, text="Browse...", command=self.browse_cookies).grid(row=4, column=2, sticky="w")
+
+        self.cookies_browser_var = tk.StringVar(value="None")
+        lbl_browser = ttk.Label(options_frame, text="Cookies from browser:")
+        lbl_browser.grid(row=5, column=0, sticky="w")
+        ToolTip(lbl_browser, "Ignored if a cookies file is provided above.")
+        browsers = ["None", "chrome", "firefox", "edge", "safari"]
+        ttk.OptionMenu(options_frame, self.cookies_browser_var, browsers[0], *browsers).grid(row=5, column=1, sticky="w")
 
         # ---------- playlist options ----------
         playlist_frame = ttk.LabelFrame(self, text="Playlist options")
@@ -391,6 +411,11 @@ class YTDLPGui(tk.Tk):
         self.resolution_var.set(opts.get("resolution", "best"))
         self.extra_text.delete("1.0", "end")
         self.extra_text.insert("1.0", opts.get("extra", ""))
+        # authentication values
+        self.cookies_file_var.set(opts.get("cookies_file", ""))
+        cb = opts.get("cookies_browser", "None")
+        if cb:
+            self.cookies_browser_var.set(cb)
         # preserve last-used preset if available
         preset = opts.get("preset")
         if preset in self.PRESETS:
@@ -492,6 +517,12 @@ class YTDLPGui(tk.Tk):
         if extra:
             opts += extra.split()
 
+        # authentication options: cookies file wins over browser selection
+        if self.cookies_file_var.get():
+            opts += ["--cookies", self.cookies_file_var.get()]
+        elif self.cookies_browser_var.get() and self.cookies_browser_var.get() != "None":
+            opts += ["--cookies-from-browser", self.cookies_browser_var.get()]
+
         # playlist flags
         if self.playlist_yes_var.get():
             opts.append("--yes-playlist")
@@ -521,6 +552,8 @@ class YTDLPGui(tk.Tk):
             "format": self.format_var.get(),
             "resolution": self.resolution_var.get(),
             "extra": extra,
+            "cookies_file": self.cookies_file_var.get(),
+            "cookies_browser": self.cookies_browser_var.get(),
         }
         # we do not record ``sb_enabled`` – the app always starts with
         # SponsorBlock turned off.  remembering a preset is still useful so

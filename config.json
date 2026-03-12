@@ -4,7 +4,8 @@
     "format": "mp4",
     "resolution": "1080",
     "extra": "",
-    "sb_enabled": true,
+    "cookies_file": "",
+    "cookies_browser": "firefox",
     "sb_preset": "Mark+Remove Sponsors"
   }
 }
