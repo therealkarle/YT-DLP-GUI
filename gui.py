@@ -229,6 +229,49 @@ class YTDLPGui(tk.Tk):
         resolutions = ["best", "1080", "720", "480", "360", "240"]
         ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=2, column=1, sticky="w")
 
+        # ---------- playlist options ----------
+        playlist_frame = ttk.LabelFrame(self, text="Playlist options")
+        playlist_frame.pack(fill="x", padx=5, pady=5)
+
+        self.playlist_yes_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(playlist_frame, text="Download playlist when available",
+                        variable=self.playlist_yes_var).grid(row=0, column=0, sticky="w", padx=5, pady=2)
+
+        ttk.Label(playlist_frame, text="Items (e.g. 1:5,10,-3):").grid(row=1, column=0, sticky="w", padx=5)
+        self.playlist_items_var = tk.StringVar()
+        ttk.Entry(playlist_frame, textvariable=self.playlist_items_var, width=30).grid(row=1, column=1, sticky="w", padx=5)
+
+        self.playlist_random_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(playlist_frame, text="Random order",
+                        variable=self.playlist_random_var).grid(row=2, column=0, sticky="w", padx=5, pady=2)
+        self.playlist_reverse_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(playlist_frame, text="Reverse order",
+                        variable=self.playlist_reverse_var).grid(row=2, column=1, sticky="w", padx=5, pady=2)
+
+        ttk.Label(playlist_frame, text="Skip after errors:").grid(row=3, column=0, sticky="w", padx=5)
+        self.skip_errors_var = tk.StringVar()
+        ttk.Entry(playlist_frame, textvariable=self.skip_errors_var, width=5).grid(row=3, column=1, sticky="w", padx=5)
+
+        # ---------- sponsorblock options ----------
+        sb_frame = ttk.LabelFrame(self, text="SponsorBlock")
+        sb_frame.pack(fill="x", padx=5, pady=5)
+
+        ttk.Label(sb_frame, text="Mark categories:").grid(row=0, column=0, sticky="w", padx=5)
+        self.sb_mark_var = tk.StringVar()
+        ttk.Entry(sb_frame, textvariable=self.sb_mark_var, width=40).grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(sb_frame, text="Remove categories:").grid(row=1, column=0, sticky="w", padx=5)
+        self.sb_remove_var = tk.StringVar()
+        ttk.Entry(sb_frame, textvariable=self.sb_remove_var, width=40).grid(row=1, column=1, sticky="w", padx=5)
+
+        ttk.Label(sb_frame, text="Chapter title template:").grid(row=2, column=0, sticky="w", padx=5)
+        self.sb_title_template = tk.StringVar()
+        ttk.Entry(sb_frame, textvariable=self.sb_title_template, width=40).grid(row=2, column=1, sticky="w", padx=5)
+
+        ttk.Label(sb_frame, text="API URL (optional):").grid(row=3, column=0, sticky="w", padx=5)
+        self.sb_api_var = tk.StringVar()
+        ttk.Entry(sb_frame, textvariable=self.sb_api_var, width=40).grid(row=3, column=1, sticky="w", padx=5)
+
         # Extra args area
         extra_frame = ttk.LabelFrame(self, text="Extra arguments")
         extra_frame.pack(fill="both", expand=True, padx=5, pady=5)
@@ -245,8 +288,12 @@ class YTDLPGui(tk.Tk):
         self.apply_last_options()
 
     def apply_last_options(self):
+        # keep output template blank by default; users often expect an empty
+        # field and the command‑line tool already uses its own default when
+        # nothing is provided.  We deliberately do *not* restore a previously
+        # saved template.
+        self.output_template.set("")
         opts = self.config.get("last_options", {})
-        self.output_template.set(opts.get("output_template", ""))
         self.format_var.set(opts.get("format", "best"))
         self.resolution_var.set(opts.get("resolution", "best"))
         self.extra_text.delete("1.0", "end")
@@ -277,9 +324,32 @@ class YTDLPGui(tk.Tk):
         extra = self.extra_text.get("1.0", "end").strip()
         if extra:
             opts += extra.split()
-        # save for later
+
+        # playlist flags
+        if self.playlist_yes_var.get():
+            opts.append("--yes-playlist")
+        if self.playlist_items_var.get():
+            opts += ["--playlist-items", self.playlist_items_var.get()]
+        if self.playlist_random_var.get():
+            opts.append("--playlist-random")
+        if self.playlist_reverse_var.get():
+            opts.append("--playlist-reverse")
+        if self.skip_errors_var.get():
+            opts += ["--skip-playlist-after-errors", self.skip_errors_var.get()]
+
+        # sponsorblock flags
+        if self.sb_mark_var.get():
+            opts += ["--sponsorblock-mark", self.sb_mark_var.get()]
+        if self.sb_remove_var.get():
+            opts += ["--sponsorblock-remove", self.sb_remove_var.get()]
+        if self.sb_title_template.get():
+            opts += ["--sponsorblock-chapter-title", self.sb_title_template.get()]
+        if self.sb_api_var.get():
+            opts += ["--sponsorblock-api", self.sb_api_var.get()]
+
+        # save for later (only basic fields).  we intentionally omit the
+        # output template so that it remains blank on the next start.
         self.config["last_options"] = {
-            "output_template": self.output_template.get(),
             "format": self.format_var.get(),
             "resolution": self.resolution_var.get(),
             "extra": extra,
