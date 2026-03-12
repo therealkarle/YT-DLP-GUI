@@ -333,13 +333,12 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(self, text="Browse...", command=self.browse).grid(row=0, column=2, padx=5, pady=5)
         ttk.Button(self, text="OK", command=self.on_ok).grid(row=1, column=1, pady=5)
 
-        # dependency installation buttons
-        # dependency controls (stacked vertically to ensure all buttons are visible)
-        ttk.Label(self, text="Dependencies:").grid(row=2, column=0, sticky="w", padx=5, pady=(10,2))
-        ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=5, pady=2)
-        ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=4, column=0, sticky="w", padx=5, pady=2)
-        ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=5, column=0, sticky="w", padx=5, pady=2)
-        ttk.Button(self, text="Download yt-dlp.exe", command=self.parent.download_yt_dlp_exe).grid(row=6, column=0, sticky="w", padx=5, pady=2)
+        # dependency installation buttons all in one row
+        ttk.Label(self, text="Dependencies:").grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
+        ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=2, pady=2)
+        ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=3, column=1, sticky="w", padx=2, pady=2)
+        ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=3, column=2, sticky="w", padx=2, pady=2)
+
 
     def browse(self):
         path = filedialog.askopenfilename(title="Select yt-dlp executable",
