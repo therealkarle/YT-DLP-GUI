@@ -241,23 +241,16 @@ class YTDLPGui(tk.Tk):
         self.wait_window(dlg)
         return result["proceed"]
 
-    def show_sb_info(self):
-        """Display a small dialog containing the SponsorBlock categories link.
+    def show_sb_info(self, event=None):
+        """Open the SponsorBlock categories wiki directly in the browser.
 
-        A clickable hyperlink is provided so the user can open the wiki in their
-        browser.
+        Clicking the info icon will no longer pop up a dialog; instead the
+        URL is opened straight away.
         """
-        dlg = tk.Toplevel(self)
-        dlg.title("SponsorBlock categories")
-        dlg.transient(self)
-        dlg.grab_set()
-
         link = "https://wiki.sponsor.ajay.app/w/Types"
-        lbl = tk.Label(dlg, text="Available categories:", justify="left")
-        lbl.pack(padx=10, pady=(10, 0))
-        h = tk.Label(dlg, text=link, fg="blue", cursor="hand2")
-        h.pack(padx=10, pady=(0, 10))
-        h.bind("<Button-1>", lambda e: __import__("webbrowser").open(link))
+        # use the standard library webbrowser module to open the link
+        __import__("webbrowser").open(link)
+
 
         btn = ttk.Button(dlg, text="Close", command=dlg.destroy)
         btn.pack(pady=(0, 10))
@@ -348,7 +341,7 @@ class YTDLPGui(tk.Tk):
 
         lbl_mark = ttk.Label(sb_frame, text="Mark categories:")
         lbl_mark.grid(row=1, column=0, sticky="w", padx=5)
-        ToolTip(lbl_mark, "Click the info icon for a clickable link")
+        ToolTip(lbl_mark, "Click the info icon to open SponsorBlock categories in your browser")
         info_mark = tk.Label(sb_frame, text="ℹ️", fg="blue", cursor="hand2")
         info_mark.grid(row=1, column=2, sticky="w")
         info_mark.bind("<Button-1>", lambda e: self.show_sb_info())
@@ -356,7 +349,7 @@ class YTDLPGui(tk.Tk):
         ttk.Entry(sb_frame, textvariable=self.sb_mark_var, width=40).grid(row=1, column=1, sticky="w", padx=5)
         lbl_remove = ttk.Label(sb_frame, text="Remove categories:")
         lbl_remove.grid(row=2, column=0, sticky="w", padx=5)
-        ToolTip(lbl_remove, "Click the info icon for a clickable link")
+        ToolTip(lbl_remove, "Click the info icon to open SponsorBlock categories in your browser")
         info_remove = tk.Label(sb_frame, text="ℹ️", fg="blue", cursor="hand2")
         info_remove.grid(row=2, column=2, sticky="w")
         info_remove.bind("<Button-1>", lambda e: self.show_sb_info())
