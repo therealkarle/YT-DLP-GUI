@@ -5,8 +5,15 @@ help.txt
 pyproject.toml
 devscripts/
 
+#other dependency scripts
+ffmpeg.exe
+ffmpeg-8.0.1-essentials_build
+
 # Ignore media files
 *.mp4
 *.mp3
 
+#cahe files
+__pycache__
+.venv
 

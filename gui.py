@@ -48,6 +48,147 @@ class YTDLPGui(tk.Tk):
             return sys._MEIPASS
         return os.path.dirname(os.path.abspath(__file__))
 
+    def find_executable(self, *names):
+        for name in names:
+            path = shutil.which(name)
+            if path:
+                return path
+
+        script_dir = self.script_dir()
+        for name in names:
+            candidate = os.path.join(script_dir, name)
+            if os.path.isfile(candidate):
+                return candidate
+        return None
+
+    def has_ffmpeg(self):
+        return self.find_executable("ffmpeg", "ffmpeg.exe") is not None
+
+    def has_js_runtime(self):
+        # yt-dlp enables **only** deno by default; other engines (node, bun,
+        # quickjs) must be manually activated with --js-runtimes.  Checking for
+        # anything else would give false confidence because yt-dlp will still
+        # warn that no runtime is available unless deno is installed or you
+        # explicitly enable another one.
+        return self.find_executable("deno", "deno.exe") is not None
+
+    def check_dependencies(self, url):
+        """Return True if all required dependencies appear available.
+
+        If something critical is missing, show a hard error dialog and return
+        False so the download is not attempted. We still log the state for
+        debugging. This method targets the two common problems seen in the
+        bug report: missing *ffmpeg* (needed to merge and thus to get high-
+        quality output) and missing a JS runtime (causes YouTube to hide many
+        formats; the warning from yt-dlp itself is often not obvious enough).
+        """
+        fmt = self.format_var.get()
+        problems = []
+
+        if not self.has_ffmpeg() and fmt in ("best", "mp4", "mkv", "webm"):
+            msg = (
+                "ffmpeg was not found on your system or next to the GUI. "
+                "Without ffmpeg yt-dlp cannot merge separate video+audio streams "
+                "and will often fall back to poor pre‑merged files like 360p. "
+                "Please install ffmpeg or use the 'Install external deps' button."
+            )
+            self.log("Warning: " + msg)
+            problems.append(msg)
+
+        if ("youtube.com" in url or "youtu.be" in url) and not self.has_js_runtime():
+            msg = (
+                "No supported JavaScript runtime was detected. yt-dlp enables only "
+                "deno by default, and YouTube extraction without any runtime is "
+                "deprecated; that often results in a single 360p format. "
+                "Install deno (or another engine and pass --js-runtimes) and see "
+                "https://github.com/yt-dlp/yt-dlp/wiki/EJS for details."
+            )
+            self.log("Warning: " + msg)
+            problems.append(msg)
+
+        if problems:
+            # show a custom dialog so we can display a clickable link and
+            # color it; askyesno cannot provide that formatting.
+            proceed = self._ask_dependency_dialog(problems)
+            if not proceed:
+                return False
+        return True
+
+    # keep old name for backward compatibility with tests (if any)
+    warn_about_missing_dependencies = check_dependencies
+
+    def _ask_dependency_dialog(self, problems):
+        """Pop up a modal dialog showing *problems* and ask to proceed.
+
+        A hyperlink to the EJS wiki is included and styled as blue/underlined.
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title("Missing dependencies")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        msg = "\n\n".join(problems)
+        lbl = tk.Label(dlg, text=msg, justify="left", wraplength=400)
+        lbl.pack(padx=10, pady=(10, 0))
+
+        # hyperlink label
+        link = tk.Label(dlg, text="https://github.com/yt-dlp/yt-dlp/wiki/EJS",
+                        fg="blue", cursor="hand2")
+        link.pack(padx=10, pady=(0, 10))
+        link.bind("<Button-1>", lambda e: __import__("webbrowser").open(link.cget("text")))
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=(0, 10))
+        result = {"proceed": False}
+        def do_proceed():
+            result["proceed"] = True
+            dlg.destroy()
+        def do_cancel():
+            dlg.destroy()
+        ttk.Button(btn_frame, text="Proceed anyway", command=do_proceed).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=do_cancel).pack(side="left", padx=5)
+
+        self.wait_window(dlg)
+        return result["proceed"]
+
+    def _ask_demo_url(self):
+        """Ask the user if they'd like to download a demo video when no URL is
+        provided.  Returns True if the user wants to proceed, False otherwise.
+
+        The dialog contains a clickable, highlighted link to the demo video so
+        they can easily copy it or open it in a browser.
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title("Demo-Video")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        msg = (
+            "No URL provided.\n\n"
+            'Would you like to download a demo video from my channel "The Real Karle"?'
+        )
+        lbl = tk.Label(dlg, text=msg, justify="left", wraplength=400)
+        lbl.pack(padx=10, pady=(10, 0))
+
+        link_text = "https://www.youtube.com/watch?v=QuAaxY7xDwg&t=9s"
+        link = tk.Label(dlg, text=link_text, fg="blue", cursor="hand2")
+        link.pack(padx=10, pady=(0, 10))
+        link.bind("<Button-1>", lambda e: __import__("webbrowser").open(link_text))
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=(0, 10))
+        result = {"proceed": False}
+        def do_proceed():
+            result["proceed"] = True
+            dlg.destroy()
+        def do_cancel():
+            dlg.destroy()
+        ttk.Button(btn_frame, text="Ja", command=do_proceed).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Nein", command=do_cancel).pack(side="left", padx=5)
+
+        self.wait_window(dlg)
+        return result["proceed"]
+
     def create_widgets(self):
         # URL entry and run button
         top_frame = ttk.Frame(self)
@@ -69,15 +210,15 @@ class YTDLPGui(tk.Tk):
         ttk.Entry(options_frame, textvariable=self.output_template, width=40).grid(row=0, column=1, sticky="w")
 
         # format selection dropdown
-        self.format_var = tk.StringVar()
+        self.format_var = tk.StringVar(value="best")
         ttk.Label(options_frame, text="Format:").grid(row=1, column=0, sticky="w")
-        formats = ["mp4", "mkv", "webm", "mp3", "wav", "best"]
+        formats = ["best", "mp4", "mkv", "webm", "mp3", "wav"]
         ttk.OptionMenu(options_frame, self.format_var, formats[0], *formats).grid(row=1, column=1, sticky="w")
 
         # resolution selection dropdown
-        self.resolution_var = tk.StringVar()
+        self.resolution_var = tk.StringVar(value="best")
         ttk.Label(options_frame, text="Resolution:").grid(row=2, column=0, sticky="w")
-        resolutions = ["1080", "720", "480", "360", "240", "best"]
+        resolutions = ["best", "1080", "720", "480", "360", "240"]
         ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=2, column=1, sticky="w")
 
         # Extra args area
@@ -98,7 +239,7 @@ class YTDLPGui(tk.Tk):
     def apply_last_options(self):
         opts = self.config.get("last_options", {})
         self.output_template.set(opts.get("output_template", ""))
-        self.format_var.set(opts.get("format", ""))
+        self.format_var.set(opts.get("format", "best"))
         self.resolution_var.set(opts.get("resolution", "best"))
         self.extra_text.delete("1.0", "end")
         self.extra_text.insert("1.0", opts.get("extra", ""))
@@ -107,13 +248,24 @@ class YTDLPGui(tk.Tk):
         opts = []
         if self.output_template.get():
             opts += ["-o", self.output_template.get()]
-        if self.format_var.get():
-            opts += ["-f", self.format_var.get()]
-        if self.resolution_var.get():
-            # yt-dlp uses "-f bestvideo[height<=...]+bestaudio" for resolution; simple approach with "-S" sorting
-            res = self.resolution_var.get()
-            if res != "best":
-                opts += ["-S", f"res:{res}"]
+
+        fmt = self.format_var.get()
+        res = self.resolution_var.get()
+
+        if fmt == "mp4":
+            opts += ["-t", "mp4"]
+        elif fmt == "mkv":
+            opts += ["-t", "mkv"]
+        elif fmt == "webm":
+            opts += ["--merge-output-format", "webm", "--remux-video", "webm"]
+        elif fmt == "mp3":
+            opts += ["-t", "mp3"]
+        elif fmt == "wav":
+            opts += ["-x", "--audio-format", "wav"]
+
+        if res and res != "best" and fmt not in ("mp3", "wav"):
+            opts += ["-S", f"res:{res}"]
+
         extra = self.extra_text.get("1.0", "end").strip()
         if extra:
             opts += extra.split()
@@ -131,11 +283,20 @@ class YTDLPGui(tk.Tk):
     def on_run(self):
         url = self.url_var.get().strip()
         if not url:
-            messagebox.showwarning("Input required", "Please enter a URL to download.")
-            return
+            # no URL supplied, offer the user a demo video link instead
+            if self._ask_demo_url():
+                # user agreed, prepopulate the field so logs/commands are clear
+                url = "https://www.youtube.com/watch?v=QuAaxY7xDwg&t=9s"
+                self.url_var.set(url)
+            else:
+                # nothing to do
+                return
         cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")]
         cmd += self.collect_options()
         cmd.append(url)
+        # enforce critical dependencies are present; pop up error and abort if not
+        if not self.check_dependencies(url):
+            return
         self.log(f"Executing: {' '.join(cmd)}")
         # start process in background and keep reference for cancellation
         self.current_proc = None
@@ -316,6 +477,28 @@ class YTDLPGui(tk.Tk):
             except Exception as e:
                 self.log(f"Error running install_deps.py: {e}")
                 messagebox.showerror("Execution error", f"install_deps.py failed:\n{e}")
+            # after the script runs attempt to install ffmpeg if missing
+            if not self.has_ffmpeg():
+                self.log("ffmpeg not detected; downloading static build...")
+                try:
+                    ff_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+                    ff_zip = os.path.join(self.script_dir(), "ffmpeg.zip")
+                    urllib.request.urlretrieve(ff_url, ff_zip)
+                    with zipfile.ZipFile(ff_zip, 'r') as zf:
+                        for member in zf.namelist():
+                            if member.endswith("ffmpeg.exe"):
+                                zf.extract(member, self.script_dir())
+                                src = os.path.join(self.script_dir(), member)
+                                dst = os.path.join(self.script_dir(), "ffmpeg.exe")
+                                shutil.move(src, dst)
+                                break
+                    os.remove(ff_zip)
+                    self.log("ffmpeg downloaded to script directory")
+                    messagebox.showinfo("Dependencies", "ffmpeg downloaded and placed next to GUI.")
+                except Exception as ff_e:
+                    self.log(f"Error downloading ffmpeg: {ff_e}")
+                    # not fatal, just inform
+            
         threading.Thread(target=worker, daemon=True).start()
 
 
@@ -338,6 +521,8 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=2, pady=2)
         ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=3, column=1, sticky="w", padx=2, pady=2)
         ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=3, column=2, sticky="w", padx=2, pady=2)
+        # helpful link for JavaScript runtimes required by YouTube
+        ttk.Button(self, text="JS runtime info", command=self.open_js_help).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
 
 
     def browse(self):
@@ -345,6 +530,10 @@ class SettingsDialog(tk.Toplevel):
                                            filetypes=[("Executables", "*.exe;*"), ("All files", "*")])
         if path:
             self.path_var.set(path)
+
+    def open_js_help(self):
+        import webbrowser
+        webbrowser.open("https://github.com/yt-dlp/yt-dlp/wiki/EJS")
 
     def on_ok(self):
         self.parent.config["yt_dlp_path"] = self.path_var.get()
