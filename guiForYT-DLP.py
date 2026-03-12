@@ -1,7 +1,9 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
+import importlib
 import json
 import os
+import platform
 import subprocess
 import threading
 import sys
@@ -9,10 +11,11 @@ import urllib.request
 import zipfile
 import shutil
 import shlex
+import tempfile
 
 
-# URL used when the GUI automatically fetches ffmpeg binaries for the
-# "Install external deps" button.  Historically we downloaded the smaller
+# URL used when the GUI automatically fetches ffmpeg binaries from the
+# dependency management dialog. Historically we downloaded the smaller
 # "essentials" build, which lacks certain codecs and – critically – did not
 # include ffprobe.exe.  Users needing SponsorBlock or other postprocessing
 # features would then get errors like "ffprobe not found" even though
@@ -22,7 +25,7 @@ import shlex
 # The download link comes from gyan.dev; it may be updated as newer releases
 # appear but should always contain the word "full" so tests can detect
 # incorrect URLs.
-FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.zip"
+FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.7z"
 
 
 # minimal tooltip helper adapted from numerous examples; shows simple text on
@@ -168,6 +171,67 @@ class YTDLPGui(tk.Tk):
         # explicitly enable another one.
         return self.find_executable("deno", "deno.exe") is not None
 
+    def get_ffmpeg_download_urls(self):
+        """Return preferred ffmpeg download URLs for the current Windows arch."""
+        machine = platform.machine().lower()
+        if "arm" in machine and "64" in machine:
+            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-winarm64-gpl.zip"
+        elif machine in ("x86", "i386", "i686") or sys.maxsize <= 2 ** 32:
+            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win32-gpl.zip"
+        else:
+            fallback_zip = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        return [FFMPEG_DOWNLOAD_URL, fallback_zip]
+
+    def _find_file_in_tree(self, root_dir, filename):
+        for current_root, _, files in os.walk(root_dir):
+            if filename in files:
+                return os.path.join(current_root, filename)
+        return None
+
+    def _extract_7z_archive(self, archive_path, target_dir):
+        seven_zip = self.find_executable("7z", "7z.exe", "7zr", "7zr.exe")
+        if seven_zip:
+            subprocess.check_call([seven_zip, "x", archive_path, f"-o{target_dir}", "-y"])
+            return
+
+        try:
+            py7zr = importlib.import_module("py7zr")
+        except ImportError:
+            self.log("py7zr not installed; installing it to unpack ffmpeg .7z archive...")
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-U", "py7zr"])
+            py7zr = importlib.import_module("py7zr")
+
+        with py7zr.SevenZipFile(archive_path, mode="r") as archive:
+            archive.extractall(path=target_dir)
+
+    def _extract_ffmpeg_archive(self, archive_path):
+        """Extract ffmpeg/ffprobe from a downloaded archive into script_dir."""
+        archive_name = os.path.basename(archive_path).lower()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            if archive_name.endswith(".zip"):
+                with zipfile.ZipFile(archive_path, "r") as archive:
+                    archive.extractall(temp_dir)
+            elif archive_name.endswith(".7z"):
+                self._extract_7z_archive(archive_path, temp_dir)
+            else:
+                raise ValueError(f"Unsupported ffmpeg archive format: {archive_name}")
+
+            extracted = []
+            for binary_name in ("ffmpeg.exe", "ffprobe.exe"):
+                source_path = self._find_file_in_tree(temp_dir, binary_name)
+                if not source_path:
+                    continue
+                dest_path = os.path.join(self.script_dir(), binary_name)
+                if os.path.exists(dest_path):
+                    os.remove(dest_path)
+                shutil.move(source_path, dest_path)
+                extracted.append(binary_name)
+
+            if not extracted:
+                raise FileNotFoundError("ffmpeg.exe or ffprobe.exe not found in downloaded archive")
+
+            return extracted
+
     def check_dependencies(self, url):
         """Return True if all required dependencies appear available.
 
@@ -190,7 +254,7 @@ class YTDLPGui(tk.Tk):
                 "ffmpeg was not found on your system or next to the GUI. "
                 "Without ffmpeg yt-dlp cannot merge separate video+audio streams "
                 "and will often fall back to poor pre‑merged files like 360p. "
-                "Please install ffmpeg or use the 'Install external deps' button."
+                "Please install ffmpeg from 'Manage dependencies...'."
             )
             self.log("Warning: " + msg)
             problems.append(msg)
@@ -203,8 +267,8 @@ class YTDLPGui(tk.Tk):
                 "ffprobe was not found on your system or next to the GUI. "
                 "Many yt-dlp features (SponsorBlock, chapters, metadata, etc.) "
                 "require ffprobe to determine the video duration. "
-                "Please install ffmpeg (which includes ffprobe) or use the "
-                "'Install external deps' button."
+                "Please install ffmpeg (which includes ffprobe) from "
+                "'Manage dependencies...'."
             )
             self.log("Warning: " + msg)
             problems.append(msg)
@@ -737,8 +801,8 @@ class YTDLPGui(tk.Tk):
 
         # if we were able to locate an ffmpeg/ffprobe binary outside of PATH, pass
         # its directory to yt-dlp so postprocessing can find ffprobe.  this
-        # handles the common case where the user used the "Install external deps"
-        # button; we download the executables next to the GUI but do not modify
+        # handles the common case where the user installed ffmpeg from the
+        # dependency management dialog; we download the executables next to the GUI but do not modify
         # the PATH.  always supplying the location is harmless when the tool
         # can already find the program itself.
         ffloc = self.find_executable("ffmpeg", "ffmpeg.exe")
@@ -949,6 +1013,23 @@ class YTDLPGui(tk.Tk):
             self.log(f"Error installing yt-dlp via pip: {e}")
             messagebox.showerror("Installation error", f"Failed to install yt-dlp:\n{e}")
 
+    def pip_install(self, packages: list[str]):
+        """Install or update arbitrary Python packages in a background thread.
+
+        ``packages`` is a list of names that will be passed to ``pip install -U``.
+        The output is logged and a message box is shown on success or failure.
+        """
+        def worker():
+            self.log(f"Installing Python packages: {', '.join(packages)}")
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-U"] + packages)
+                self.log("Python packages installed/updated successfully.")
+                messagebox.showinfo("Success", f"Installed/updated packages: {', '.join(packages)}")
+            except Exception as e:
+                self.log(f"Error installing Python packages {packages}: {e}")
+                messagebox.showerror("Installation error", f"Failed to install packages:\n{e}")
+        threading.Thread(target=worker, daemon=True).start()
+
     def download_yt_dlp_exe(self):
         """Fetch the latest yt-dlp.exe from GitHub releases and save it next to the script."""
         url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
@@ -963,6 +1044,37 @@ class YTDLPGui(tk.Tk):
             except Exception as e:
                 self.log(f"Error downloading yt-dlp.exe: {e}")
                 messagebox.showerror("Download error", f"Failed to download yt-dlp.exe:\n{e}")
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _download_ffmpeg_binaries_worker(self):
+        """Download a static ffmpeg build and place ffmpeg/ffprobe next to the GUI."""
+        last_error = None
+        for ff_url in self.get_ffmpeg_download_urls():
+            archive_path = None
+            try:
+                self.log(f"Trying ffmpeg source: {ff_url}")
+                archive_path = os.path.join(self.script_dir(), os.path.basename(ff_url))
+                urllib.request.urlretrieve(ff_url, archive_path)
+                extracted = self._extract_ffmpeg_archive(archive_path)
+                self.log(f"Downloaded and extracted: {', '.join(extracted)}")
+                messagebox.showinfo("Dependencies", "ffmpeg and ffprobe downloaded and placed next to GUI.")
+                return True
+            except Exception as ff_e:
+                last_error = ff_e
+                self.log(f"Error downloading ffmpeg from {ff_url}: {ff_e}")
+            finally:
+                if archive_path and os.path.exists(archive_path):
+                    os.remove(archive_path)
+
+        self.log(f"Error downloading ffmpeg: {last_error}")
+        messagebox.showerror("Download error", f"Failed to download ffmpeg/ffprobe:\n{last_error}")
+        return False
+
+    def download_ffmpeg_binaries(self):
+        """Download ffmpeg and ffprobe without running the full dependency script."""
+        def worker():
+            self._download_ffmpeg_binaries_worker()
+
         threading.Thread(target=worker, daemon=True).start()
 
     def download_devscripts(self):
@@ -1060,28 +1172,9 @@ class YTDLPGui(tk.Tk):
                 self.log(f"Error running install_deps.py: {e}")
                 messagebox.showerror("Execution error", f"install_deps.py failed:\n{e}")
             # after the script runs attempt to install ffmpeg if missing
-            if not self.has_ffmpeg():
+            if not self.has_ffmpeg() or not self.has_ffprobe():
                 self.log("ffmpeg not detected; downloading static build...")
-                try:
-                    ff_url = FFMPEG_DOWNLOAD_URL
-                    ff_zip = os.path.join(self.script_dir(), os.path.basename(ff_url))
-                    urllib.request.urlretrieve(ff_url, ff_zip)
-                    with zipfile.ZipFile(ff_zip, 'r') as zf:
-                        # extract *both* ffmpeg.exe and ffprobe.exe if present
-                        for member in zf.namelist():
-                            if member.endswith("ffmpeg.exe") or member.endswith("ffprobe.exe"):
-                                zf.extract(member, self.script_dir())
-                                src = os.path.join(self.script_dir(), member)
-                                dst = os.path.join(self.script_dir(), os.path.basename(member))
-                                shutil.move(src, dst)
-                        # we intentionally do *not* break; the essentials build
-                        # contains both binaries and we want them both.
-                    os.remove(ff_zip)
-                    self.log("ffmpeg/ffprobe downloaded to script directory")
-                    messagebox.showinfo("Dependencies", "ffmpeg and ffprobe downloaded and placed next to GUI.")
-                except Exception as ff_e:
-                    self.log(f"Error downloading ffmpeg: {ff_e}")
-                    # not fatal, just inform
+                self._download_ffmpeg_binaries_worker()
             
         threading.Thread(target=worker, daemon=True).start()
 
@@ -1104,15 +1197,16 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(self, text="Ask before overwriting existing files",
                         variable=self.ask_overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
 
-        ttk.Button(self, text="OK", command=self.on_ok).grid(row=2, column=1, pady=5)
-
-        # dependency installation buttons all in one row
         ttk.Label(self, text="Dependencies:").grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
+        # individual installers
         ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=2, pady=2)
         ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=3, column=1, sticky="w", padx=2, pady=2)
         ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=3, column=2, sticky="w", padx=2, pady=2)
+        # manage dialog entry below
+        ttk.Button(self, text="Manage dependencies...", command=self.open_dependencies).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=(5,2))
         # helpful link for JavaScript runtimes required by YouTube
-        ttk.Button(self, text="JS runtime info", command=self.open_js_help).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
+        ttk.Button(self, text="JS runtime info", command=self.open_js_help).grid(row=5, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
+        ttk.Button(self, text="OK", command=self.on_ok).grid(row=6, column=1, pady=5)
 
 
     def browse(self):
@@ -1120,6 +1214,10 @@ class SettingsDialog(tk.Toplevel):
                                            filetypes=[("Executables", "*.exe;*"), ("All files", "*")])
         if path:
             self.path_var.set(path)
+
+    def open_dependencies(self):
+        """Open a dialog that lists all known dependencies and their status."""
+        DependenciesDialog(self.parent)
 
     def open_js_help(self):
         import webbrowser
@@ -1130,6 +1228,185 @@ class SettingsDialog(tk.Toplevel):
         self.parent.config["ask_overwrite"] = bool(self.ask_overwrite_var.get())
         self.parent.save_config()
         self.destroy()
+
+
+class DependenciesDialog(tk.Toplevel):
+    """Dialog showing status of various yt-dlp dependencies.
+
+    The user can see whether each dependency is currently available and invoke
+    installation/update actions.  The implementation aims to mirror the
+    information in the yt-dlp README's "Dependencies" section without
+    duplicating the entire text.  External binaries are checked with helper
+    methods from the main GUI class, while Python packages and extras are
+    inspected via import tests or by parsing ``pyproject.toml`` if present.
+    """
+
+    STATUS_INSTALLED_COLOR = "#0a7d24"
+    STATUS_MISSING_COLOR = "#b42318"
+
+    def __init__(self, parent: YTDLPGui):
+        super().__init__(parent)
+        self.title("Dependencies")
+        self.parent = parent
+        self.deps = []  # will hold info about each dependency row
+        self.create_widgets()
+
+    def create_widgets(self):
+        # gather dependency definitions
+        def add_entry(name, check_fn, action_fn, button_text="Install/Update", include_in_install_all=True):
+            status = "Installed" if check_fn() else "Missing"
+            status_var = tk.StringVar(value=status)
+            row = len(self.deps)
+            ttk.Label(self, text=name).grid(row=row, column=0, sticky="w", padx=5, pady=2)
+            status_label = tk.Label(
+                self,
+                textvariable=status_var,
+                fg=self._status_color(status),
+                anchor="w",
+            )
+            status_label.grid(row=row, column=1, sticky="w", padx=5, pady=2)
+            btn = ttk.Button(self, text=button_text,
+                             command=lambda cf=check_fn, av=status_var, af=action_fn: self._run_action(cf, av, af))
+            btn.grid(row=row, column=2, padx=5, pady=2)
+            self.deps.append({
+                "check": check_fn,
+                "status_var": status_var,
+                "status_label": status_label,
+                "action": action_fn,
+                "include_in_install_all": include_in_install_all,
+            })
+
+        # simple checks
+        add_entry("yt-dlp executable",
+                  lambda: os.path.isfile(self.parent.config.get("yt_dlp_path", "yt-dlp.exe")),
+                  self.parent.install_or_update_yt_dlp)
+
+        add_entry("yt-dlp Python package",
+                  lambda: self._is_pkg_installed("yt_dlp"),
+                  lambda: self.parent.pip_install(["yt-dlp"]))
+
+        add_entry("ffmpeg/ffprobe binaries",
+                  lambda: self.parent.has_ffmpeg() and self.parent.has_ffprobe(),
+                  self.parent.download_ffmpeg_binaries,
+                  button_text="Download")
+
+        add_entry("devscripts folder",
+                  lambda: os.path.isdir(os.path.join(self.parent.script_dir(), "devscripts")),
+                  self.parent.download_devscripts,
+                  button_text="Download")
+
+        add_entry("JavaScript runtime (deno/node/bun/quickjs)",
+                  self.parent.has_js_runtime,
+                  lambda: __import__("webbrowser").open("https://github.com/yt-dlp/yt-dlp/wiki/EJS"),
+                  button_text="Open guide",
+                  include_in_install_all=False)
+
+        # extras defined in pyproject.toml, if available
+        extras = self.load_pyproject_extras(self.parent.script_dir())
+        for group, deps_list in extras.items():
+            # skip the build/dev groups
+            if group in ("build", "dev", "test", "static-analysis", "pyinstaller"):
+                continue
+            display = f"Python extras [{group}]"
+            add_entry(display,
+                      lambda deps=deps_list: self._check_any_pkg(deps),
+                      lambda grp=group: self.parent.pip_install([f"yt-dlp[{grp}]"]))
+
+        # control buttons
+        controls_row = len(self.deps)
+        ttk.Button(self, text="Install dependencies", command=self.parent.run_install_deps_script).grid(
+            row=controls_row,
+            column=0,
+            sticky="w",
+            padx=5,
+            pady=(10,5),
+        )
+        ttk.Button(self, text="Install missing", command=self.install_missing).grid(
+            row=controls_row,
+            column=1,
+            padx=5,
+            pady=(10,5),
+        )
+        ttk.Button(self, text="Install/Update All", command=self.install_all).grid(
+            row=controls_row,
+            column=2,
+            sticky="e",
+            padx=5,
+            pady=(10,5),
+        )
+    def _status_color(self, status: str) -> str:
+        return self.STATUS_INSTALLED_COLOR if status == "Installed" else self.STATUS_MISSING_COLOR
+
+    def _run_action(self, check_fn, status_var, action_fn):
+        action_fn()
+        status_label = next(entry["status_label"] for entry in self.deps if entry["status_var"] is status_var)
+        self._schedule_status_refresh(check_fn, status_var, status_label)
+
+    def _schedule_status_refresh(self, check_fn, status_var, status_label):
+        def refresh():
+            installed = check_fn()
+            status = "Installed" if installed else "Missing"
+            status_var.set(status)
+            status_label.configure(fg=self._status_color(status))
+
+        for delay_ms in (0, 1000, 3000):
+            self.after(delay_ms, refresh)
+
+    def install_all(self):
+        for entry in self.deps:
+            if not entry["include_in_install_all"]:
+                continue
+            self._run_action(entry["check"], entry["status_var"], entry["action"])
+
+    def install_missing(self):
+        """Run install/update actions only for entries currently marked "Missing"."""
+        for entry in self.deps:
+            if entry["status_var"].get() == "Missing" and entry.get("include_in_install_all", True):
+                self._run_action(entry["check"], entry["status_var"], entry["action"])
+
+    def _is_pkg_installed(self, pkg_name: str) -> bool:
+        try:
+            __import__(pkg_name)
+            return True
+        except ImportError:
+            return False
+
+    def _check_any_pkg(self, deps_list: list[str]) -> bool:
+        """Return True if at least one of the given requirement strings is importable.
+
+        The strings may contain version specifiers or environment markers; only
+        the bare package name is considered.
+        """
+        for pkg in deps_list:
+            # strip off extras, version, and markers
+            name = pkg.split(";")[0].strip()
+            name = name.split(">=")[0].split("<")[0]
+            name = name.split("==")[0].split("!=")[0]
+            name = name.replace("-", "_")
+            if name and self._is_pkg_installed(name):
+                return True
+        return False
+
+    @staticmethod
+    def load_pyproject_extras(script_dir: str) -> dict:
+        """Parse ``pyproject.toml`` and return the optional-dependencies mapping.
+
+        If parsing fails or the file is not found, an empty dict is returned.
+        """
+        extras = {}
+        try:
+            import tomllib
+        except ImportError:
+            tomllib = None
+        path = os.path.join(script_dir, "pyproject.toml")
+        if tomllib and os.path.isfile(path):
+            try:
+                with open(path, "rb") as f:
+                    data = tomllib.load(f)
+                extras = data.get("project", {}).get("optional-dependencies", {}) or {}
+            except Exception:
+                pass
+        return extras
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ devscripts/
 ffmpeg.exe
 ffmpeg-8.0.1-essentials_build
 ffmpeg-8.0.1-full_build
+ffmpeg-release-full.7z
 
 # Ignore media files
 *.mp4
