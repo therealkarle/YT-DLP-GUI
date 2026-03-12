@@ -10,6 +10,37 @@ import zipfile
 import shutil
 import shlex
 
+
+# minimal tooltip helper adapted from numerous examples; shows simple text on
+# mouse hover.  we use it below for the SponsorBlock category labels.
+class ToolTip:
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tipwindow = None
+        widget.bind("<Enter>", self.show)
+        widget.bind("<Leave>", self.hide)
+
+    def show(self, event=None):
+        if self.tipwindow or not self.text:
+            return
+        x, y, cx, cy = self.widget.bbox("insert") if self.widget.bbox("insert") else (0,0,0,0)
+        x = x + self.widget.winfo_rootx() + 20
+        y = y + self.widget.winfo_rooty() + 10
+        self.tipwindow = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(tw, text=self.text, justify="left",
+                         background="#ffffe0", relief="solid", borderwidth=1,
+                         font=("tahoma", "8", "normal"))
+        label.pack(ipadx=1)
+
+    def hide(self, event=None):
+        tw = self.tipwindow
+        self.tipwindow = None
+        if tw:
+            tw.destroy()
+
 # Configuration handling
 CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG = {
@@ -19,6 +50,20 @@ DEFAULT_CONFIG = {
 
 
 class YTDLPGui(tk.Tk):
+    # some built‑in presets for commonly used combinations; users may later
+    # extend this via configuration if needed
+    PRESETS = {
+        "Default": {},
+        "Audio only": {"format": "mp3", "resolution": ""},
+        "Video 1080p": {"format": "mp4", "resolution": "1080"},
+    }
+    SB_PRESETS = {
+        "None": {},
+        "Mark+Remove Sponsors": {"mark": "sponsor", "remove": "sponsor"},
+        "Mark All": {"mark": "all", "remove": ""},
+        "Custom Template": {"mark": "", "remove": "", "title": "[SB] %(category_names)l"},
+    }
+
     def __init__(self):
         super().__init__()
         self.title("yt-dlp GUI")
@@ -193,6 +238,28 @@ class YTDLPGui(tk.Tk):
         self.wait_window(dlg)
         return result["proceed"]
 
+    def show_sb_info(self):
+        """Display a small dialog containing the SponsorBlock categories link.
+
+        A clickable hyperlink is provided so the user can open the wiki in their
+        browser.
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title("SponsorBlock categories")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        link = "https://wiki.sponsor.ajay.app/w/Types"
+        lbl = tk.Label(dlg, text="Available categories:", justify="left")
+        lbl.pack(padx=10, pady=(10, 0))
+        h = tk.Label(dlg, text=link, fg="blue", cursor="hand2")
+        h.pack(padx=10, pady=(0, 10))
+        h.bind("<Button-1>", lambda e: __import__("webbrowser").open(link))
+
+        btn = ttk.Button(dlg, text="Close", command=dlg.destroy)
+        btn.pack(pady=(0, 10))
+        self.wait_window(dlg)
+
     def create_widgets(self):
         # URL entry and run button
         top_frame = ttk.Frame(self)
@@ -213,21 +280,29 @@ class YTDLPGui(tk.Tk):
         options_frame = ttk.LabelFrame(self, text="Common options")
         options_frame.pack(fill="x", padx=5, pady=5)
 
+        # preset dropdown sits at the top of common options and allows quick
+        # one‑click configuration of other fields
+        self.preset_var = tk.StringVar(value=list(self.PRESETS.keys())[0])
+        ttk.Label(options_frame, text="Preset:").grid(row=0, column=0, sticky="w")
+        preset_names = list(self.PRESETS.keys())
+        ttk.OptionMenu(options_frame, self.preset_var, preset_names[0], *preset_names,
+                       command=self.apply_preset).grid(row=0, column=1, sticky="w")
+
         self.output_template = tk.StringVar()
-        ttk.Label(options_frame, text="Output template:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(options_frame, textvariable=self.output_template, width=40).grid(row=0, column=1, sticky="w")
+        ttk.Label(options_frame, text="Output template:").grid(row=1, column=0, sticky="w")
+        ttk.Entry(options_frame, textvariable=self.output_template, width=40).grid(row=1, column=1, sticky="w")
 
         # format selection dropdown
         self.format_var = tk.StringVar(value="best")
-        ttk.Label(options_frame, text="Format:").grid(row=1, column=0, sticky="w")
+        ttk.Label(options_frame, text="Format:").grid(row=2, column=0, sticky="w")
         formats = ["best", "mp4", "mkv", "webm", "mp3", "wav"]
-        ttk.OptionMenu(options_frame, self.format_var, formats[0], *formats).grid(row=1, column=1, sticky="w")
+        ttk.OptionMenu(options_frame, self.format_var, formats[0], *formats).grid(row=2, column=1, sticky="w")
 
         # resolution selection dropdown
         self.resolution_var = tk.StringVar(value="best")
-        ttk.Label(options_frame, text="Resolution:").grid(row=2, column=0, sticky="w")
+        ttk.Label(options_frame, text="Resolution:").grid(row=3, column=0, sticky="w")
         resolutions = ["best", "1080", "720", "480", "360", "240"]
-        ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=2, column=1, sticky="w")
+        ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=3, column=1, sticky="w")
 
         # ---------- playlist options ----------
         playlist_frame = ttk.LabelFrame(self, text="Playlist options")
@@ -252,28 +327,50 @@ class YTDLPGui(tk.Tk):
         self.skip_errors_var = tk.StringVar()
         ttk.Entry(playlist_frame, textvariable=self.skip_errors_var, width=5).grid(row=3, column=1, sticky="w", padx=5)
 
-        # ---------- sponsorblock options ----------
+        # sponsorblock checkbox and fields will be placed just above the extra
+        # arguments section so they stay together visually
+        self.sb_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Enable SponsorBlock",
+                        variable=self.sb_enabled_var,
+                        command=self.toggle_sb_frame).pack(fill="x", padx=5, pady=2)
+
         sb_frame = ttk.LabelFrame(self, text="SponsorBlock")
-        sb_frame.pack(fill="x", padx=5, pady=5)
+        self.sb_frame = sb_frame
+        # preset selector for SponsorBlock
+        self.sb_preset_var = tk.StringVar(value=list(self.SB_PRESETS.keys())[0])
+        ttk.Label(sb_frame, text="SB preset:").grid(row=0, column=0, sticky="w", padx=5)
+        sb_preset_names = list(self.SB_PRESETS.keys())
+        ttk.OptionMenu(sb_frame, self.sb_preset_var, sb_preset_names[0], *sb_preset_names,
+                       command=self.apply_sb_preset).grid(row=0, column=1, sticky="w", padx=5)
 
-        ttk.Label(sb_frame, text="Mark categories:").grid(row=0, column=0, sticky="w", padx=5)
+        lbl_mark = ttk.Label(sb_frame, text="Mark categories:")
+        lbl_mark.grid(row=1, column=0, sticky="w", padx=5)
+        ToolTip(lbl_mark, "Click the info icon for a clickable link")
+        info_mark = tk.Label(sb_frame, text="ℹ️", fg="blue", cursor="hand2")
+        info_mark.grid(row=1, column=2, sticky="w")
+        info_mark.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_mark_var = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_mark_var, width=40).grid(row=0, column=1, sticky="w", padx=5)
-
-        ttk.Label(sb_frame, text="Remove categories:").grid(row=1, column=0, sticky="w", padx=5)
+        ttk.Entry(sb_frame, textvariable=self.sb_mark_var, width=40).grid(row=1, column=1, sticky="w", padx=5)
+        lbl_remove = ttk.Label(sb_frame, text="Remove categories:")
+        lbl_remove.grid(row=2, column=0, sticky="w", padx=5)
+        ToolTip(lbl_remove, "Click the info icon for a clickable link")
+        info_remove = tk.Label(sb_frame, text="ℹ️", fg="blue", cursor="hand2")
+        info_remove.grid(row=2, column=2, sticky="w")
+        info_remove.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_remove_var = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_remove_var, width=40).grid(row=1, column=1, sticky="w", padx=5)
-
-        ttk.Label(sb_frame, text="Chapter title template:").grid(row=2, column=0, sticky="w", padx=5)
+        ttk.Entry(sb_frame, textvariable=self.sb_remove_var, width=40).grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Label(sb_frame, text="Chapter title template:").grid(row=3, column=0, sticky="w", padx=5)
         self.sb_title_template = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_title_template, width=40).grid(row=2, column=1, sticky="w", padx=5)
-
-        ttk.Label(sb_frame, text="API URL (optional):").grid(row=3, column=0, sticky="w", padx=5)
+        ttk.Entry(sb_frame, textvariable=self.sb_title_template, width=40).grid(row=3, column=1, sticky="w", padx=5)
+        ttk.Label(sb_frame, text="API URL (optional):").grid(row=4, column=0, sticky="w", padx=5)
         self.sb_api_var = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_api_var, width=40).grid(row=3, column=1, sticky="w", padx=5)
-
+        ttk.Entry(sb_frame, textvariable=self.sb_api_var, width=40).grid(row=4, column=1, sticky="w", padx=5)
+        # hidden until enabled
+        
         # Extra args area
         extra_frame = ttk.LabelFrame(self, text="Extra arguments")
+        # keep reference for tests/layout checks
+        self.extra_frame = extra_frame
         extra_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.extra_text = tk.Text(extra_frame, height=5)
         self.extra_text.pack(fill="both", expand=True)
@@ -298,9 +395,71 @@ class YTDLPGui(tk.Tk):
         self.resolution_var.set(opts.get("resolution", "best"))
         self.extra_text.delete("1.0", "end")
         self.extra_text.insert("1.0", opts.get("extra", ""))
+        # preserve last-used preset if available
+        preset = opts.get("preset")
+        if preset in self.PRESETS:
+            self.preset_var.set(preset)
+            # adjust other fields to match
+            self.apply_preset()
+        # sponsorblock presets
+        sbp = opts.get("sb_preset")
+        if sbp in self.SB_PRESETS:
+            self.sb_preset_var.set(sbp)
+            self.apply_sb_preset()
+
+    def toggle_sb_frame(self):
+        """Show or hide the SponsorBlock options frame based on the checkbox.
+
+        The checkbox is linked to :attr:`sb_enabled_var`.  When unchecked we
+        simply forget the frame so the whole section collapses; when checked we
+        repack it immediately before the extra‑arguments area so it appears
+        directly under the checkbox instead of at the bottom of the window.
+        """
+        if self.sb_enabled_var.get():
+            # ensure the extra_frame attribute exists (created later) before
+            # we try to reference it; the checkbox will only be usable once the
+            # whole GUI is built so this is safe.
+            self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
+        else:
+            self.sb_frame.pack_forget()
+
+    def apply_preset(self, _=None):
+        """Apply the currently selected preset by updating other controls.
+
+        Called automatically when the preset drop‑down changes.  Only a few
+        properties are handled for now; additional fields can be added easily.
+        """
+        p = self.preset_var.get()
+        settings = self.PRESETS.get(p, {})
+        fmt = settings.get("format")
+        if fmt is not None:
+            self.format_var.set(fmt)
+        res = settings.get("resolution")
+        if res is not None:
+            self.resolution_var.set(res)
+        # we do not alter output_template or other user text; presets focus on
+        # core format/resolution choices for the moment.
+
+    def apply_sb_preset(self, _=None):
+        """Set SponsorBlock fields according to the selected SB_PRESETS entry.
+
+        Automatically enables the SponsorBlock section so that the user can
+        immediately see the resulting values.
+        """
+        name = self.sb_preset_var.get()
+        settings = self.SB_PRESETS.get(name, {})
+        self.sb_mark_var.set(settings.get("mark", ""))
+        self.sb_remove_var.set(settings.get("remove", ""))
+        self.sb_title_template.set(settings.get("title", ""))
+        self.sb_api_var.set(settings.get("api", ""))
+        # enabling frame so the choices are visible
+        if not self.sb_enabled_var.get():
+            self.sb_enabled_var.set(True)
+            self.toggle_sb_frame()
 
     def collect_options(self):
         opts = []
+        current_preset = self.preset_var.get()
         if self.output_template.get():
             opts += ["-o", self.output_template.get()]
 
@@ -337,15 +496,16 @@ class YTDLPGui(tk.Tk):
         if self.skip_errors_var.get():
             opts += ["--skip-playlist-after-errors", self.skip_errors_var.get()]
 
-        # sponsorblock flags
-        if self.sb_mark_var.get():
-            opts += ["--sponsorblock-mark", self.sb_mark_var.get()]
-        if self.sb_remove_var.get():
-            opts += ["--sponsorblock-remove", self.sb_remove_var.get()]
-        if self.sb_title_template.get():
-            opts += ["--sponsorblock-chapter-title", self.sb_title_template.get()]
-        if self.sb_api_var.get():
-            opts += ["--sponsorblock-api", self.sb_api_var.get()]
+        # sponsorblock flags - only apply when the feature is enabled
+        if self.sb_enabled_var.get():
+            if self.sb_mark_var.get():
+                opts += ["--sponsorblock-mark", self.sb_mark_var.get()]
+            if self.sb_remove_var.get():
+                opts += ["--sponsorblock-remove", self.sb_remove_var.get()]
+            if self.sb_title_template.get():
+                opts += ["--sponsorblock-chapter-title", self.sb_title_template.get()]
+            if self.sb_api_var.get():
+                opts += ["--sponsorblock-api", self.sb_api_var.get()]
 
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.
@@ -354,6 +514,13 @@ class YTDLPGui(tk.Tk):
             "resolution": self.resolution_var.get(),
             "extra": extra,
         }
+        # also remember the preset if it's not the default
+        if current_preset and current_preset != list(self.PRESETS.keys())[0]:
+            self.config["last_options"]["preset"] = current_preset
+        # and the sponsorblock preset if non‑default
+        sbp_cur = self.sb_preset_var.get()
+        if sbp_cur and sbp_cur != list(self.SB_PRESETS.keys())[0]:
+            self.config["last_options"]["sb_preset"] = sbp_cur
         # persist to disk
         self.save_config()
         return opts

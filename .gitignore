@@ -16,4 +16,5 @@ ffmpeg-8.0.1-essentials_build
 #cahe files
 __pycache__
 .venv
+tests
 
