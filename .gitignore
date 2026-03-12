@@ -8,6 +8,7 @@ devscripts/
 #other dependency scripts
 ffmpeg.exe
 ffmpeg-8.0.1-essentials_build
+ffmpeg-8.0.1-full_build
 
 # Ignore media files
 *.mp4

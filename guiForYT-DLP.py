@@ -11,6 +11,20 @@ import shutil
 import shlex
 
 
+# URL used when the GUI automatically fetches ffmpeg binaries for the
+# "Install external deps" button.  Historically we downloaded the smaller
+# "essentials" build, which lacks certain codecs and – critically – did not
+# include ffprobe.exe.  Users needing SponsorBlock or other postprocessing
+# features would then get errors like "ffprobe not found" even though
+# ffmpeg.exe was present.  Switching to the full static build ensures both
+# ffmpeg and ffprobe are bundled and provides maximum compatibility.
+#
+# The download link comes from gyan.dev; it may be updated as newer releases
+# appear but should always contain the word "full" so tests can detect
+# incorrect URLs.
+FFMPEG_DOWNLOAD_URL = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-full.zip"
+
+
 # minimal tooltip helper adapted from numerous examples; shows simple text on
 # mouse hover.  we use it below for the SponsorBlock category labels.
 class ToolTip:
@@ -132,6 +146,20 @@ class YTDLPGui(tk.Tk):
     def has_ffmpeg(self):
         return self.find_executable("ffmpeg", "ffmpeg.exe") is not None
 
+    def has_ffprobe(self):
+        """Return True if an ffprobe executable can be located.
+
+        yt-dlp requires *both* ffmpeg and ffprobe for many postprocessing
+        features (SponsorBlock, chapters, subtitles, etc).  The GUI used
+        to test only for ``ffmpeg`` which meant the bundled downloader would
+        fetch *ffmpeg.exe* but ignore ``ffprobe.exe``.  As a result SponsorBlock
+        would later fail with "ffprobe not found" even though a working
+        ffmpeg binary existed next to the GUI.  Detecting both lets us warn
+        the user earlier and gives us an opportunity to download both
+        executables.
+        """
+        return self.find_executable("ffprobe", "ffprobe.exe") is not None
+
     def has_js_runtime(self):
         # yt-dlp enables **only** deno by default; other engines (node, bun,
         # quickjs) must be manually activated with --js-runtimes.  Checking for
@@ -153,12 +181,30 @@ class YTDLPGui(tk.Tk):
         fmt = self.format_var.get()
         problems = []
 
+        # missing ffmpeg is the classic problem; warn for any format that
+        # might need merging.  we also add a second check for ffprobe so that
+        # users activating SponsorBlock or other post‑processing features are
+        # alerted early instead of seeing the cryptic yt-dlp error later.
         if not self.has_ffmpeg() and fmt in ("best", "mp4", "mkv", "webm"):
             msg = (
                 "ffmpeg was not found on your system or next to the GUI. "
                 "Without ffmpeg yt-dlp cannot merge separate video+audio streams "
                 "and will often fall back to poor pre‑merged files like 360p. "
                 "Please install ffmpeg or use the 'Install external deps' button."
+            )
+            self.log("Warning: " + msg)
+            problems.append(msg)
+
+        if not self.has_ffprobe():
+            # this warning is intentionally broad; ffprobe is used by many
+            # postprocessing helpers such as SponsorBlock, so we surface it
+            # regardless of the URL or format.
+            msg = (
+                "ffprobe was not found on your system or next to the GUI. "
+                "Many yt-dlp features (SponsorBlock, chapters, metadata, etc.) "
+                "require ffprobe to determine the video duration. "
+                "Please install ffmpeg (which includes ffprobe) or use the "
+                "'Install external deps' button."
             )
             self.log("Warning: " + msg)
             problems.append(msg)
@@ -689,6 +735,17 @@ class YTDLPGui(tk.Tk):
         if extra:
             opts += extra.split()
 
+        # if we were able to locate an ffmpeg/ffprobe binary outside of PATH, pass
+        # its directory to yt-dlp so postprocessing can find ffprobe.  this
+        # handles the common case where the user used the "Install external deps"
+        # button; we download the executables next to the GUI but do not modify
+        # the PATH.  always supplying the location is harmless when the tool
+        # can already find the program itself.
+        ffloc = self.find_executable("ffmpeg", "ffmpeg.exe")
+        if ffloc:
+            # yt-dlp accepts either the binary or the containing directory.
+            opts += ["--ffmpeg-location", os.path.dirname(ffloc)]
+
         # authentication options: cookies file wins over browser selection
         if self.cookies_file_var.get():
             opts += ["--cookies", self.cookies_file_var.get()]
@@ -1006,20 +1063,22 @@ class YTDLPGui(tk.Tk):
             if not self.has_ffmpeg():
                 self.log("ffmpeg not detected; downloading static build...")
                 try:
-                    ff_url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
-                    ff_zip = os.path.join(self.script_dir(), "ffmpeg.zip")
+                    ff_url = FFMPEG_DOWNLOAD_URL
+                    ff_zip = os.path.join(self.script_dir(), os.path.basename(ff_url))
                     urllib.request.urlretrieve(ff_url, ff_zip)
                     with zipfile.ZipFile(ff_zip, 'r') as zf:
+                        # extract *both* ffmpeg.exe and ffprobe.exe if present
                         for member in zf.namelist():
-                            if member.endswith("ffmpeg.exe"):
+                            if member.endswith("ffmpeg.exe") or member.endswith("ffprobe.exe"):
                                 zf.extract(member, self.script_dir())
                                 src = os.path.join(self.script_dir(), member)
-                                dst = os.path.join(self.script_dir(), "ffmpeg.exe")
+                                dst = os.path.join(self.script_dir(), os.path.basename(member))
                                 shutil.move(src, dst)
-                                break
+                        # we intentionally do *not* break; the essentials build
+                        # contains both binaries and we want them both.
                     os.remove(ff_zip)
-                    self.log("ffmpeg downloaded to script directory")
-                    messagebox.showinfo("Dependencies", "ffmpeg downloaded and placed next to GUI.")
+                    self.log("ffmpeg/ffprobe downloaded to script directory")
+                    messagebox.showinfo("Dependencies", "ffmpeg and ffprobe downloaded and placed next to GUI.")
                 except Exception as ff_e:
                     self.log(f"Error downloading ffmpeg: {ff_e}")
                     # not fatal, just inform
