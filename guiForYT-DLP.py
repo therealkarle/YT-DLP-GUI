@@ -69,10 +69,19 @@ class YTDLPGui(tk.Tk):
     }
     SB_PRESETS = {
         "None": {},
+        # default preset: just remove sponsors
+        "Remove sponsors": {"mark": "", "remove": "sponsor"},
+        # extended options
         "Mark+Remove Sponsors": {"mark": "sponsor", "remove": "sponsor"},
         "Mark All": {"mark": "all", "remove": ""},
+        "Remove selfpromo and sponsor": {"mark": "", "remove": "sponsor,selfpromo"},
         "Custom Template": {"mark": "", "remove": "", "title": "[SB] %(category_names)l"},
     }
+    # full list of standard SponsorBlock categories; used by the picker dialog
+    SB_CATEGORIES = [
+        "sponsor", "selfpromo", "interaction", "intro",
+        "outro", "preview", "hook", "filler",
+    ]
 
     def __init__(self):
         super().__init__()
@@ -343,6 +352,47 @@ class YTDLPGui(tk.Tk):
         # use the standard library webbrowser module to open the link
         __import__("webbrowser").open(link)
 
+    def _show_category_dialog(self, target_var: tk.StringVar):
+        """Modal dialog letting the user pick one or more SB categories.
+
+        The chosen items are written back as a comma‑separated string into
+        *target_var*.
+        """
+        dlg = tk.Toplevel(self)
+        dlg.title("Choose categories")
+        dlg.transient(self)
+        dlg.grab_set()
+
+        vars: dict[str, tk.BooleanVar] = {}
+        current = target_var.get().split(",") if target_var.get() else []
+        for cat in self.SB_CATEGORIES:
+            v = tk.BooleanVar(value=cat in current)
+            vars[cat] = v
+            ttk.Checkbutton(dlg, text=cat, variable=v).pack(anchor="w")
+
+        btn_frame = ttk.Frame(dlg)
+        btn_frame.pack(pady=5)
+
+        def select_all():
+            for v in vars.values():
+                v.set(True)
+
+        def select_none():
+            for v in vars.values():
+                v.set(False)
+
+        ttk.Button(btn_frame, text="All", command=select_all).pack(side="left", padx=2)
+        ttk.Button(btn_frame, text="None", command=select_none).pack(side="left", padx=2)
+
+        def on_ok():
+            chosen = [c for c, v in vars.items() if v.get()]
+            target_var.set(",".join(chosen))
+            dlg.destroy()
+
+        ttk.Button(btn_frame, text="OK", command=on_ok).pack(side="left", padx=2)
+
+        self.wait_window(dlg)
+
     def browse_cookies(self):
         path = filedialog.askopenfilename(title="Select cookies file",
                                            filetypes=[("Text files", "*.txt;*.cookies;*"), ("All files", "*")])
@@ -440,10 +490,12 @@ class YTDLPGui(tk.Tk):
         sb_frame = ttk.LabelFrame(self, text="SponsorBlock")
         self.sb_frame = sb_frame
         # preset selector for SponsorBlock
-        self.sb_preset_var = tk.StringVar(value=list(self.SB_PRESETS.keys())[0])
+        # start with the user-visible default preset rather than "None"
+        default_preset = "Remove sponsors"
+        self.sb_preset_var = tk.StringVar(value=default_preset)
         ttk.Label(sb_frame, text="SB preset:").grid(row=0, column=0, sticky="w", padx=5)
         sb_preset_names = list(self.SB_PRESETS.keys())
-        ttk.OptionMenu(sb_frame, self.sb_preset_var, sb_preset_names[0], *sb_preset_names,
+        ttk.OptionMenu(sb_frame, self.sb_preset_var, default_preset, *sb_preset_names,
                        command=self.apply_sb_preset).grid(row=0, column=1, sticky="w", padx=5)
 
         lbl_mark = ttk.Label(sb_frame, text="Mark categories:")
@@ -453,7 +505,12 @@ class YTDLPGui(tk.Tk):
         info_mark.grid(row=1, column=2, sticky="w")
         info_mark.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_mark_var = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_mark_var, width=40).grid(row=1, column=1, sticky="w", padx=5)
+        sb_mark_entry = ttk.Entry(sb_frame, textvariable=self.sb_mark_var,
+                                  width=30, state="readonly")
+        sb_mark_entry.grid(row=1, column=1, sticky="w", padx=5)
+        ttk.Button(sb_frame, text="…", width=3,
+                   command=lambda: self._show_category_dialog(self.sb_mark_var)).grid(row=1, column=3, sticky="w")
+
         lbl_remove = ttk.Label(sb_frame, text="Remove categories:")
         lbl_remove.grid(row=2, column=0, sticky="w", padx=5)
         ToolTip(lbl_remove, "Click the info icon to open SponsorBlock categories in your browser")
@@ -461,7 +518,11 @@ class YTDLPGui(tk.Tk):
         info_remove.grid(row=2, column=2, sticky="w")
         info_remove.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_remove_var = tk.StringVar()
-        ttk.Entry(sb_frame, textvariable=self.sb_remove_var, width=40).grid(row=2, column=1, sticky="w", padx=5)
+        sb_remove_entry = ttk.Entry(sb_frame, textvariable=self.sb_remove_var,
+                                    width=30, state="readonly")
+        sb_remove_entry.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Button(sb_frame, text="…", width=3,
+                   command=lambda: self._show_category_dialog(self.sb_remove_var)).grid(row=2, column=3, sticky="w")
         ttk.Label(sb_frame, text="Chapter title template:").grid(row=3, column=0, sticky="w", padx=5)
         self.sb_title_template = tk.StringVar()
         ttk.Entry(sb_frame, textvariable=self.sb_title_template, width=40).grid(row=3, column=1, sticky="w", padx=5)
@@ -520,10 +581,16 @@ class YTDLPGui(tk.Tk):
         # frame is left hidden by default; no need to call toggle_sb_frame().
 
         sbp = opts.get("sb_preset")
+        # migrate old default if present
+        if sbp == "Mark+Remove Sponsors":
+            sbp = "Remove sponsors"
         if sbp in self.SB_PRESETS:
             self.sb_preset_var.set(sbp)
             # do not apply the preset automatically – the section is off.
             # values will be filled once the user enables SponsorBlock.
+        else:
+            # if nothing saved, make sure we still show the sensible default
+            self.sb_preset_var.set("Remove sponsors")
 
     def toggle_sb_frame(self):
         """Show or hide the SponsorBlock options frame based on the checkbox.
@@ -532,8 +599,20 @@ class YTDLPGui(tk.Tk):
         simply forget the frame so the whole section collapses; when checked we
         repack it immediately before the extra‑arguments area so it appears
         directly under the checkbox instead of at the bottom of the window.
+
+        As a usability nicety, when the user enables SponsorBlock and no remove
+        categories have been set yet we default to removing "sponsor" entries.
         """
         if self.sb_enabled_var.get():
+            # set a sensible default if nothing specified yet
+            if not self.sb_remove_var.get():
+                self.sb_remove_var.set("sponsor")
+            # select a matching preset if currently the first ("None") entry
+            first = list(self.SB_PRESETS.keys())[0]
+            if self.sb_preset_var.get() == first:
+                # default to the simple "Remove sponsors" preset
+                self.sb_preset_var.set("Remove sponsors")
+                self.apply_sb_preset()
             # ensure the extra_frame attribute exists (created later) before
             # we try to reference it; the checkbox will only be usable once the
             # whole GUI is built so this is safe.
@@ -569,8 +648,14 @@ class YTDLPGui(tk.Tk):
         """
         name = self.sb_preset_var.get()
         settings = self.SB_PRESETS.get(name, {})
-        self.sb_mark_var.set(settings.get("mark", ""))
-        self.sb_remove_var.set(settings.get("remove", ""))
+
+        def fmt(val):
+            if isinstance(val, (list, tuple)):
+                return ",".join(val)
+            return val or ""
+
+        self.sb_mark_var.set(fmt(settings.get("mark", "")))
+        self.sb_remove_var.set(fmt(settings.get("remove", "")))
         self.sb_title_template.set(settings.get("title", ""))
         self.sb_api_var.set(settings.get("api", ""))
         # do not toggle sb_enabled_var here; the user must explicitly check the
