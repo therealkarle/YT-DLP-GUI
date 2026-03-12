@@ -8,6 +8,7 @@ import sys
 import urllib.request
 import zipfile
 import shutil
+import shlex
 
 # Configuration handling
 CONFIG_FILENAME = "config.json"
@@ -204,6 +205,9 @@ class YTDLPGui(tk.Tk):
         ttk.Button(top_frame, text="Cancel", command=self.on_cancel).pack(side="left", padx=5)
         ttk.Button(top_frame, text="Settings", command=self.open_settings).pack(side="left", padx=5)
         ttk.Button(top_frame, text="Readme", command=self.open_readme).pack(side="left", padx=5)
+        self.raw_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top_frame, text="Raw command", variable=self.raw_var,
+                        command=self.toggle_raw_mode).pack(side="left", padx=5)
 
         # Options area
         options_frame = ttk.LabelFrame(self, text="Common options")
@@ -231,7 +235,7 @@ class YTDLPGui(tk.Tk):
         self.extra_text = tk.Text(extra_frame, height=5)
         self.extra_text.pack(fill="both", expand=True)
 
-        # Log console
+        # Log console (also used for raw command input when enabled)
         log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, padx=5, pady=5)
         self.log_text = tk.Text(log_frame, state="disabled", height=10)
@@ -337,6 +341,51 @@ class YTDLPGui(tk.Tk):
         """Open the yt-dlp GitHub README in the default web browser."""
         import webbrowser
         webbrowser.open("https://github.com/yt-dlp/yt-dlp/blob/master/README.md")
+
+    def toggle_raw_mode(self):
+        """Enable or disable raw-command editing in the log field."""
+        if self.raw_var.get():
+            # allow editing, clear previous log content to start fresh
+            self.log_text.configure(state="normal")
+            self.log_text.delete("1.0", "end")
+            self.log_text.insert("1.0", "# type command-line arguments here (e.g. -o output.mp4 https://...)")
+        else:
+            # back to log-only mode
+            self.log_text.configure(state="disabled")
+
+    def on_run(self):
+        if self.raw_var.get():
+            # run exactly what the user typed in the log field
+            command_line = self.log_text.get("1.0", "end").strip()
+            # ignore comment marker lines
+            if not command_line or command_line.startswith("#"):
+                messagebox.showwarning("No command", "Please enter yt-dlp command arguments in the log field.")
+                return
+            args = shlex.split(command_line)
+            cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")] + args
+        else:
+            url = self.url_var.get().strip()
+            if not url:
+                # no URL supplied, offer the user a demo video link instead
+                if self._ask_demo_url():
+                    # user agreed, prepopulate the field so logs/commands are clear
+                    url = "https://www.youtube.com/watch?v=QuAaxY7xDwg&t=9s"
+                    self.url_var.set(url)
+                else:
+                    # nothing to do
+                    return
+            cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")]
+            cmd += self.collect_options()
+            cmd.append(url)
+        # enforce critical dependencies are present; pop up error and abort if not
+        if not self.check_dependencies("" if self.raw_var.get() else url):
+            return
+        self.log(f"Executing: {' '.join(cmd)}")
+        # start process in background and keep reference for cancellation
+        self.current_proc = None
+        thread = threading.Thread(target=self.run_subprocess, args=(cmd,))
+        thread.daemon = True
+        thread.start()
 
     def on_cancel(self):
         if self.current_proc and self.current_proc.poll() is None:
