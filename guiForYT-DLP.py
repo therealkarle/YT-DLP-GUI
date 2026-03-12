@@ -48,6 +48,8 @@ class ToolTip:
 CONFIG_FILENAME = "config.json"
 DEFAULT_CONFIG = {
     "yt_dlp_path": "yt-dlp.exe",
+    # whether to ask the user before re-downloading an already existing file
+    "ask_overwrite": True,
     "last_options": {
         # previous options saved by collect_options; key names documented in
         # ``collect_options``.  cookies fields added for authentication.
@@ -245,6 +247,91 @@ class YTDLPGui(tk.Tk):
 
         self.wait_window(dlg)
         return result["proceed"]
+
+    def _confirm_overwrite(self, url: str, opts: list | None = None) -> bool:
+        """Determine the filename yt-dlp would write and confirm if it exists.
+
+        ``opts`` may be provided as the same list of command-line options that
+        will later be passed to yt-dlp (excluding the URL).  Passing the
+        options ensures that format/resolution/output-template selections are
+        taken into account; previously we built a minimal command here which
+        sometimes produced a different filename than the real run.  The list
+        may be mutated by this helper: if the user elects to "Download
+        anyway" we append ``--force-overwrites`` so the eventual command will
+        actually overwrite the existing file.
+
+        Returns ``True`` if the download should proceed.  If the file already
+        exists on disk the user is asked with a two‑button dialog; ``False``
+        is returned when the user declines.  Any errors while invoking
+        yt-dlp simply log the problem and allow the download to continue so
+        the helper is non‑intrusive.
+
+        This helper is skipped for playlists since :option:`--get-filename`
+        only reports the first entry, and we don't want to repeatedly prompt
+        before each item.
+        """
+        # configuration overrides the check entirely
+        if not self.config.get("ask_overwrite", True):
+            return True
+
+        # if the caller didn't supply option flags, fall back to recomputing
+        # them here.  doing it once in the caller and passing them is preferred
+        # because ``collect_options`` saves the config, and we don't want to
+        # write twice for a single button press.
+        if opts is None:
+            opts = self.collect_options()
+
+        # build the command used only for filename determination
+        check_cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe"),
+                     "--get-filename"]
+        # ``opts`` may already contain ``-o``; that is fine
+        check_cmd.extend(opts)
+        check_cmd.append(url)
+
+        try:
+            proc = subprocess.run(check_cmd, capture_output=True, text=True)
+            if proc.returncode != 0:
+                # something went wrong; let yt-dlp handle the normal run
+                return True
+            filename = proc.stdout.strip().splitlines()[0]
+            if not filename:
+                return True
+            if not os.path.isabs(filename):
+                filename = os.path.join(os.getcwd(), filename)
+            if os.path.exists(filename):
+                self.log(f"Existing file detected: {filename}")
+                # custom dialog so we can control the button text
+                dlg = tk.Toplevel(self)
+                dlg.title("File exists")
+                dlg.transient(self)
+                dlg.grab_set()
+
+                msg = f"The file '{os.path.basename(filename)}' already exists."
+                lbl = tk.Label(dlg, text=msg, justify="left", wraplength=400)
+                lbl.pack(padx=10, pady=(10, 0))
+
+                btn_frame = ttk.Frame(dlg)
+                btn_frame.pack(pady=(0, 10))
+                result = {"proceed": False}
+                def do_download():
+                    result["proceed"] = True
+                    dlg.destroy()
+                def do_cancel():
+                    dlg.destroy()
+                ttk.Button(btn_frame, text="Download anyway", command=do_download).pack(side="left", padx=5)
+                ttk.Button(btn_frame, text="Cancel", command=do_cancel).pack(side="left", padx=5)
+
+                self.wait_window(dlg)
+                if result["proceed"]:
+                    # if the user explicitly wants to continue, make sure we
+                    # tell yt-dlp to overwrite the existing file; the default
+                    # behaviour is to skip already-downloaded content.
+                    if opts is not None and "--force-overwrites" not in opts:
+                        opts.append("--force-overwrites")
+                return result["proceed"]
+        except Exception as e:
+            self.log(f"Error checking existing file: {e}")
+        return True
 
     def show_sb_info(self, event=None):
         """Open the SponsorBlock categories wiki directly in the browser.
@@ -620,8 +707,11 @@ class YTDLPGui(tk.Tk):
     def on_run(self):
         # ``url`` is referenced later even when raw mode is enabled; define it
         # upfront so that Pylance knows it always exists and we avoid the
-        # "possibly unbound" warning.
+        # "possibly unbound" warning.  similarly, create an empty ``cmd`` list
+        # now so that even if a future edit accidentally moves the assignment
+        # inside a conditional we won't crash with an UnboundLocalError.
         url: str = ""
+        cmd: list = []
 
         if self.raw_var.get():
             # run exactly what the user typed in the log field
@@ -643,8 +733,23 @@ class YTDLPGui(tk.Tk):
                 else:
                     # nothing to do
                     return
+            # build the base command after url logic so it's always initialized
+            # gather options once so we can use them for the filename check as
+            # well as the actual command; ``collect_options`` also persists the
+            # settings.
+            opts = self.collect_options()
+            # if the output file already exists, ask before re-downloading.
+            # skip this check for playlists since ``--get-filename`` only
+            # reports the first entry and the user would still need to confirm
+            # each item manually.
+            if not self.playlist_yes_var.get():
+                if not self._confirm_overwrite(url, opts):
+                    # user declined; abort run
+                    return
+            # build the final command after the overwrite check so that any
+            # mutation of ``opts`` (e.g. adding --force-overwrites) is included
             cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")]
-            cmd += self.collect_options()
+            cmd += opts
             cmd.append(url)
         # enforce critical dependencies are present; pop up error and abort if not
         if self.raw_var.get():
@@ -849,7 +954,13 @@ class SettingsDialog(tk.Toplevel):
         self.path_var = tk.StringVar(value=self.parent.config.get("yt_dlp_path", ""))
         ttk.Entry(self, textvariable=self.path_var, width=50).grid(row=0, column=1, sticky="w", padx=5, pady=5)
         ttk.Button(self, text="Browse...", command=self.browse).grid(row=0, column=2, padx=5, pady=5)
-        ttk.Button(self, text="OK", command=self.on_ok).grid(row=1, column=1, pady=5)
+
+        # new setting for overwrite confirmation
+        self.ask_overwrite_var = tk.BooleanVar(value=self.parent.config.get("ask_overwrite", True))
+        ttk.Checkbutton(self, text="Ask before overwriting existing files",
+                        variable=self.ask_overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
+
+        ttk.Button(self, text="OK", command=self.on_ok).grid(row=2, column=1, pady=5)
 
         # dependency installation buttons all in one row
         ttk.Label(self, text="Dependencies:").grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
@@ -872,6 +983,7 @@ class SettingsDialog(tk.Toplevel):
 
     def on_ok(self):
         self.parent.config["yt_dlp_path"] = self.path_var.get()
+        self.parent.config["ask_overwrite"] = bool(self.ask_overwrite_var.get())
         self.parent.save_config()
         self.destroy()
 
