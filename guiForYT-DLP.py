@@ -707,12 +707,35 @@ class YTDLPGui(tk.Tk):
         self.skip_errors_var = tk.StringVar()
         ttk.Entry(playlist_frame, textvariable=self.skip_errors_var, width=5).grid(row=3, column=1, sticky="w", padx=5)
 
+        # trim checkbox and fields will be placed just above the extra
+        # arguments section so they stay together visually
+        self.trim_enabled_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(self, text="Enable Trim",
+                        variable=self.trim_enabled_var,
+                        command=self.toggle_trim_frame).pack(fill="x", padx=5, pady=2)
+
+        trim_frame = ttk.LabelFrame(self, text="Trim")
+        self.trim_frame = trim_frame
+
+        ttk.Label(trim_frame, text="Start:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        self.trim_start_mode_var = tk.StringVar(value="Timestamp")
+        ttk.OptionMenu(trim_frame, self.trim_start_mode_var, "Timestamp", "Timestamp", "Relative").grid(row=0, column=1, sticky="w")
+        self.trim_start_var = tk.StringVar()
+        ttk.Entry(trim_frame, textvariable=self.trim_start_var, width=20).grid(row=0, column=2, sticky="w", padx=5)
+
+        ttk.Label(trim_frame, text="End:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        self.trim_end_mode_var = tk.StringVar(value="Timestamp")
+        ttk.OptionMenu(trim_frame, self.trim_end_mode_var, "Timestamp", "Timestamp", "Relative").grid(row=1, column=1, sticky="w")
+        self.trim_end_var = tk.StringVar()
+        ttk.Entry(trim_frame, textvariable=self.trim_end_var, width=20).grid(row=1, column=2, sticky="w", padx=5)
+
         # sponsorblock checkbox and fields will be placed just above the extra
         # arguments section so they stay together visually
         self.sb_enabled_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self, text="Enable SponsorBlock",
-                        variable=self.sb_enabled_var,
-                        command=self.toggle_sb_frame).pack(fill="x", padx=5, pady=2)
+        self.sb_checkbox = ttk.Checkbutton(self, text="Enable SponsorBlock",
+                                          variable=self.sb_enabled_var,
+                                          command=self.toggle_sb_frame)
+        self.sb_checkbox.pack(fill="x", padx=5, pady=2)
 
         sb_frame = ttk.LabelFrame(self, text="SponsorBlock")
         self.sb_frame = sb_frame
@@ -835,6 +858,12 @@ class YTDLPGui(tk.Tk):
             # if nothing saved, make sure we still show the sensible default
             self.sb_preset_var.set("Remove sponsors")
 
+        # restore trim values but keep the feature disabled by default
+        self.trim_start_var.set(opts.get("trim_start", ""))
+        self.trim_start_mode_var.set(opts.get("trim_start_mode", "Timestamp"))
+        self.trim_end_var.set(opts.get("trim_end", ""))
+        self.trim_end_mode_var.set(opts.get("trim_end_mode", "Timestamp"))
+
     def toggle_sb_frame(self):
         """Show or hide the SponsorBlock options frame based on the checkbox.
 
@@ -862,6 +891,70 @@ class YTDLPGui(tk.Tk):
             self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
         else:
             self.sb_frame.pack_forget()
+
+    def toggle_trim_frame(self):
+        """Show or hide the Trim options frame when the checkbox changes."""
+        # Keep ordering consistent: Trim should always appear above SponsorBlock.
+        self._repack_optional_frames()
+
+    def toggle_sb_frame(self):
+        """Show or hide the SponsorBlock options frame based on the checkbox.
+
+        The checkbox is linked to :attr:`sb_enabled_var`.  When unchecked we
+        simply forget the frame so the whole section collapses; when checked we
+        repack it immediately before the extra‑arguments area so it appears
+        directly under the checkbox instead of at the bottom of the window.
+
+        As a usability nicety, when the user enables SponsorBlock and no remove
+        categories have been set yet we default to removing "sponsor" entries.
+        """
+        if self.sb_enabled_var.get():
+            # set a sensible default if nothing specified yet
+            if not self.sb_remove_var.get():
+                self.sb_remove_var.set("sponsor")
+            # select a matching preset if currently the first ("None") entry
+            first = list(self.SB_PRESETS.keys())[0]
+            if self.sb_preset_var.get() == first:
+                # default to the simple "Remove sponsors" preset
+                self.sb_preset_var.set("Remove sponsors")
+                self.apply_sb_preset()
+
+        self._repack_optional_frames()
+
+    def _repack_optional_frames(self):
+        """Ensure Trim and SponsorBlock frames are packed in the desired order.
+
+        The order should always be:
+            Trim (if enabled)
+            SponsorBlock (if enabled)
+            Extra arguments
+        """
+        self.trim_frame.pack_forget()
+        self.sb_frame.pack_forget()
+
+        if self.trim_enabled_var.get():
+            # Ensure trim section is directly under the trim checkbox.
+            self.trim_frame.pack(fill="x", padx=5, pady=5, before=self.sb_checkbox)
+        if self.sb_enabled_var.get():
+            self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
+
+    def _normalize_trim_value(self, mode: str, value: str, is_end: bool) -> str | None:
+        """Normalize a trim value based on mode.
+
+        * Timestamp mode: return the raw trimmed string.
+        * Relative mode: interpret the value as seconds. For end values,
+          return a negative number (e.g. '-16' for 16 seconds from the end).
+
+        Returns None if the input is empty or otherwise invalid.
+        """
+        val = (value or "").strip()
+        if not val:
+            return None
+        if mode == "Relative":
+            if not val.isdigit():
+                return None
+            return f"-{val}" if is_end else val
+        return val
 
     def apply_preset(self, _=None):
         """Apply the currently selected preset by updating other controls.
@@ -990,6 +1083,19 @@ class YTDLPGui(tk.Tk):
             if self.sb_api_var.get():
                 opts += ["--sponsorblock-api", self.sb_api_var.get()]
 
+        # trim flags - only apply when the feature is enabled and we have values
+        if self.trim_enabled_var.get():
+            start = self._normalize_trim_value(self.trim_start_mode_var.get(), self.trim_start_var.get(), is_end=False)
+            end = self._normalize_trim_value(self.trim_end_mode_var.get(), self.trim_end_var.get(), is_end=True)
+            if start or end:
+                if start and end:
+                    section = f"*{start}-{end}"
+                elif start:
+                    section = f"*{start}-inf"
+                else:
+                    section = f"*0-{end}"
+                opts += ["--download-sections", section]
+
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.
         self.config["last_options"] = {
@@ -1000,6 +1106,10 @@ class YTDLPGui(tk.Tk):
             "extra": extra,
             "cookies_file": self.cookies_file_var.get(),
             "cookies_browser": self.cookies_browser_var.get(),
+            "trim_start": self.trim_start_var.get(),
+            "trim_start_mode": self.trim_start_mode_var.get(),
+            "trim_end": self.trim_end_var.get(),
+            "trim_end_mode": self.trim_end_mode_var.get(),
         }
         # we do not record ``sb_enabled`` – the app always starts with
         # SponsorBlock turned off.  remembering a preset is still useful so
