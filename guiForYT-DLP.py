@@ -111,8 +111,27 @@ class YTDLPGui(tk.Tk):
         super().__init__()
         self.title("yt-dlp GUI")
         self.config = DEFAULT_CONFIG.copy()
+
+        # Developer inspect mode: Ctrl+Click any widget to open the object browser.
+        self._inspect_mode = False
+        self.bind_all("<Button-1>", self._inspect_click, add="+")
+
         self.load_config()
         self.create_widgets()
+
+    def _inspect_click(self, event):
+        """If inspect mode is enabled, open the object browser for the clicked widget."""
+        if not getattr(self, "_inspect_mode", False):
+            return
+        # Require Ctrl to avoid interfering with normal clicks.
+        if not (event.state & 0x4):
+            return
+        widget = event.widget
+        if widget:
+            self.open_object_browser(widget)
+
+    def set_inspect_mode(self, enabled: bool):
+        self._inspect_mode = bool(enabled)
 
     def load_config(self):
         try:
@@ -1385,6 +1404,39 @@ class YTDLPGui(tk.Tk):
         import webbrowser
         webbrowser.open("https://github.com/yt-dlp/yt-dlp/blob/master/README.md")
 
+    def open_object_browser(self, obj=None):
+        """Launch the objbrowser GUI to inspect *obj*.
+
+        If *obj* is None, we inspect the main `yt_dlp` module.
+
+        Note: running objbrowser starts a Qt event loop, which will block the
+        Tk mainloop until the object browser window is closed.
+        """
+        try:
+            import objbrowser  # noqa: F401
+        except Exception as e:
+            messagebox.showerror(
+                "Object Browser not available",
+                "The 'objbrowser' package could not be imported.\n"
+                "Install it with:\n\n"
+                "    pip install objbrowser pyside6\n\n"
+                f"Error: {e}"
+            )
+            return
+
+        if obj is None:
+            try:
+                import yt_dlp
+                obj = yt_dlp
+            except Exception:
+                obj = None
+
+        try:
+            # Run objbrowser in-process so we can inspect arbitrary Python objects.
+            objbrowser.browse(obj)
+        except Exception as e:
+            messagebox.showerror("Object Browser", f"Failed to start object browser:\n{e}")
+
     def toggle_raw_mode(self):
         """Enable or disable raw-command editing in the log field."""
         if self.raw_var.get():
@@ -1689,7 +1741,9 @@ class SettingsDialog(tk.Toplevel):
 
         # dependency management entry point
         ttk.Button(self, text="Dependencies", command=self.open_dependencies).grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,5))
-        ttk.Button(self, text="OK", command=self.on_ok).grid(row=3, column=1, pady=5)
+        # developer tools are hidden in a separate dialog
+        ttk.Button(self, text="Developer options...", command=self.open_developer_options).grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
+        ttk.Button(self, text="OK", command=self.on_ok).grid(row=4, column=1, pady=5)
 
 
     def browse(self):
@@ -1697,6 +1751,9 @@ class SettingsDialog(tk.Toplevel):
                                            filetypes=[("Executables", "*.exe;*"), ("All files", "*")])
         if path:
             self.path_var.set(path)
+
+    def open_developer_options(self):
+        DeveloperDialog(self.parent)
 
     def open_dependencies(self):
         """Open a dialog that lists all known dependencies and their status."""
@@ -1711,6 +1768,32 @@ class SettingsDialog(tk.Toplevel):
         self.parent.config["ask_overwrite"] = bool(self.ask_overwrite_var.get())
         self.parent.save_config()
         self.destroy()
+
+
+class DeveloperDialog(tk.Toplevel):
+    """Dialog containing developer tools and shortcuts."""
+
+    def __init__(self, parent: YTDLPGui):
+        super().__init__(parent)
+        self.title("Developer options")
+        self.parent = parent
+        self.create_widgets()
+
+    def create_widgets(self):
+        ttk.Label(self, text="Developer tools").grid(row=0, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+        self.inspect_mode_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            self,
+            text="Ctrl+Click to inspect widgets",
+            variable=self.inspect_mode_var,
+            command=lambda: self.parent.set_inspect_mode(self.inspect_mode_var.get()),
+        ).grid(row=1, column=0, columnspan=2, sticky="w", padx=5, pady=5)
+
+        ttk.Button(self, text="Open object browser", command=self.parent.open_object_browser).grid(
+            row=2, column=0, columnspan=2, sticky="w", padx=5, pady=5
+        )
+        ttk.Button(self, text="Close", command=self.destroy).grid(row=3, column=0, columnspan=2, pady=(10, 5))
 
 
 class DependenciesDialog(tk.Toplevel):
