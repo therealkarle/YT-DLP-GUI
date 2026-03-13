@@ -73,7 +73,7 @@ class YTDLPGui(tk.Tk):
     # extend this via configuration if needed
     PRESETS = {
         "Default": {},
-        "Audio only": {"format": "mp3", "resolution": ""},
+        "Audio only": {"format": "mp3", "resolution": "best"},
         "Video 1080p": {"format": "mp4", "resolution": "1080"},
     }
     SB_PRESETS = {
@@ -604,17 +604,50 @@ class YTDLPGui(tk.Tk):
         ttk.Label(options_frame, text="Output template:").grid(row=1, column=0, sticky="w")
         ttk.Entry(options_frame, textvariable=self.output_template, width=40).grid(row=1, column=1, sticky="w")
 
-        # format selection dropdown
+        # format selection dropdown (video and audio formats are visually separated)
+        # and allow entering a custom format string.
         self.format_var = tk.StringVar(value="best")
+        self.format_custom_var = tk.StringVar()
         ttk.Label(options_frame, text="Format:").grid(row=2, column=0, sticky="w")
-        formats = ["best", "mp4", "mkv", "webm", "mp3", "wav"]
-        ttk.OptionMenu(options_frame, self.format_var, formats[0], *formats).grid(row=2, column=1, sticky="w")
+        format_menu = ttk.OptionMenu(options_frame, self.format_var, "best")
+        format_menu.grid(row=2, column=1, sticky="w")
+        # Build menu so we can add non-selectable headers and a custom entry option
+        format_menu_menu = format_menu["menu"]
+        format_menu_menu.delete(0, "end")
+        format_menu_menu.add_command(label="Video formats", state="disabled")
+        for v in ["best", "mp4", "mkv", "webm"]:
+            format_menu_menu.add_command(label=v, command=lambda v=v: self.format_var.set(v))
+        format_menu_menu.add_separator()
+        format_menu_menu.add_command(label="Audio formats", state="disabled")
+        for v in ["mp3", "wav"]:
+            format_menu_menu.add_command(label=v, command=lambda v=v: self.format_var.set(v))
+        format_menu_menu.add_separator()
+        format_menu_menu.add_command(label="Custom...", command=lambda: self.format_var.set("Custom"))
 
-        # resolution selection dropdown
+        self.format_custom_entry = ttk.Entry(options_frame, textvariable=self.format_custom_var,
+                                            width=20, state="disabled")
+        self.format_custom_entry.grid(row=2, column=2, sticky="w", padx=(5, 0))
+
+        def _update_format_custom(*_args):
+            state = "normal" if self.format_var.get() == "Custom" else "disabled"
+            self.format_custom_entry.configure(state=state)
+        self.format_var.trace_add("write", _update_format_custom)
+
+        # resolution selection dropdown (add 4k/1440 and allow custom value)
         self.resolution_var = tk.StringVar(value="best")
+        self.resolution_custom_var = tk.StringVar()
         ttk.Label(options_frame, text="Resolution:").grid(row=3, column=0, sticky="w")
-        resolutions = ["best", "1080", "720", "480", "360", "240"]
-        ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions).grid(row=3, column=1, sticky="w")
+        resolutions = ["best", "4k", "1440", "1080", "720", "480", "360", "240", "Custom"]
+        resolution_menu = ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions)
+        resolution_menu.grid(row=3, column=1, sticky="w")
+        self.resolution_custom_entry = ttk.Entry(options_frame, textvariable=self.resolution_custom_var,
+                                                width=20, state="disabled")
+        self.resolution_custom_entry.grid(row=3, column=2, sticky="w", padx=(5, 0))
+
+        def _update_resolution_custom(*_args):
+            state = "normal" if self.resolution_var.get() == "Custom" else "disabled"
+            self.resolution_custom_entry.configure(state=state)
+        self.resolution_var.trace_add("write", _update_resolution_custom)
 
         # authentication options (cookies)
         # users frequently need to supply a cookies file or pull from a browser
@@ -728,8 +761,24 @@ class YTDLPGui(tk.Tk):
         # saved template.
         self.output_template.set("")
         opts = self.config.get("last_options", {})
-        self.format_var.set(opts.get("format", "best"))
-        self.resolution_var.set(opts.get("resolution", "best"))
+        # restore format selection; preserve custom input if present
+        fmt = opts.get("format", "best")
+        if fmt == "Custom":
+            self.format_var.set("Custom")
+            self.format_custom_var.set(opts.get("format_custom", ""))
+        else:
+            self.format_var.set(fmt)
+            self.format_custom_var.set(opts.get("format_custom", ""))
+
+        # restore resolution selection; preserve custom input if present
+        res = opts.get("resolution", "best")
+        if res == "Custom":
+            self.resolution_var.set("Custom")
+            self.resolution_custom_var.set(opts.get("resolution_custom", ""))
+        else:
+            self.resolution_var.set(res)
+            self.resolution_custom_var.set(opts.get("resolution_custom", ""))
+
         self.extra_text.delete("1.0", "end")
         self.extra_text.insert("1.0", opts.get("extra", ""))
         # authentication values
@@ -804,9 +853,13 @@ class YTDLPGui(tk.Tk):
         fmt = settings.get("format")
         if fmt is not None:
             self.format_var.set(fmt)
+            # clear any custom text since the preset overrides it
+            self.format_custom_var.set("")
         res = settings.get("resolution")
         if res is not None:
             self.resolution_var.set(res)
+            # clear any custom text since the preset overrides it
+            self.resolution_custom_var.set("")
         # we do not alter output_template or other user text; presets focus on
         # core format/resolution choices for the moment.
 
@@ -844,19 +897,28 @@ class YTDLPGui(tk.Tk):
         fmt = self.format_var.get()
         res = self.resolution_var.get()
 
-        if fmt == "mp4":
-            opts += ["-t", "mp4"]
-        elif fmt == "mkv":
-            opts += ["-t", "mkv"]
-        elif fmt == "webm":
-            opts += ["--merge-output-format", "webm", "--remux-video", "webm"]
-        elif fmt == "mp3":
-            opts += ["-t", "mp3"]
-        elif fmt == "wav":
-            opts += ["-x", "--audio-format", "wav"]
+        # allow the user to type any yt-dlp format selector when "Custom" is chosen
+        if fmt == "Custom":
+            fmt_custom = self.format_custom_var.get().strip()
+            if fmt_custom:
+                opts += ["-f", fmt_custom]
+        else:
+            # container-style selection for common video formats
+            if fmt in ("mp4", "mkv", "webm"):
+                opts += ["--merge-output-format", fmt]
+            elif fmt == "mp3":
+                opts += ["-x", "--audio-format", "mp3"]
+            elif fmt == "wav":
+                opts += ["-x", "--audio-format", "wav"]
 
-        if res and res != "best" and fmt not in ("mp3", "wav"):
-            opts += ["-S", f"res:{res}"]
+        # allow the user to provide a custom resolution string
+        if res == "Custom":
+            res_value = self.resolution_custom_var.get().strip()
+        else:
+            res_value = res
+
+        if res_value and res_value != "best" and fmt not in ("mp3", "wav"):
+            opts += ["-S", f"res:{res_value}"]
 
         extra = self.extra_text.get("1.0", "end").strip()
         if extra:
@@ -903,7 +965,9 @@ class YTDLPGui(tk.Tk):
         # output template so that it remains blank on the next start.
         self.config["last_options"] = {
             "format": self.format_var.get(),
+            "format_custom": self.format_custom_var.get(),
             "resolution": self.resolution_var.get(),
+            "resolution_custom": self.resolution_custom_var.get(),
             "extra": extra,
             "cookies_file": self.cookies_file_var.get(),
             "cookies_browser": self.cookies_browser_var.get(),
