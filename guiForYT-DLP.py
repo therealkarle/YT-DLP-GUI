@@ -76,6 +76,19 @@ class YTDLPGui(tk.Tk):
         "Audio only": {"format": "mp3", "resolution": "best"},
         "Video 1080p": {"format": "mp4", "resolution": "1080"},
     }
+
+    # Presets for the output template (yt-dlp -o / --output).  The default
+    # preset is "Custom" which leaves the field blank so the user can type
+    # their own template.
+    OUTPUT_TEMPLATE_PRESETS = {
+        "Custom": "",
+        "Title": "%(title)s.%(ext)s",
+        "Uploader - Title": "%(uploader)s - %(title)s.%(ext)s",
+        "Date - Title": "%(upload_date)s - %(title)s.%(ext)s",
+        "Playlist/Title": "%(playlist)s/%(title)s.%(ext)s",
+        "Playlist index - Title": "%(playlist_index)s - %(title)s.%(ext)s",
+    }
+
     SB_PRESETS = {
         "None": {},
         # default preset: just remove sponsors
@@ -601,8 +614,16 @@ class YTDLPGui(tk.Tk):
                        command=self.apply_preset).grid(row=0, column=1, sticky="w")
 
         self.output_template = tk.StringVar()
+        self.output_template_preset_var = tk.StringVar(value="Custom")
         ttk.Label(options_frame, text="Output template:").grid(row=1, column=0, sticky="w")
-        ttk.Entry(options_frame, textvariable=self.output_template, width=40).grid(row=1, column=1, sticky="w")
+        ttk.Entry(options_frame, textvariable=self.output_template, width=30).grid(row=1, column=1, sticky="w")
+        ttk.OptionMenu(
+            options_frame,
+            self.output_template_preset_var,
+            "Custom",
+            *list(self.OUTPUT_TEMPLATE_PRESETS.keys()),
+            command=self.apply_output_template_preset,
+        ).grid(row=1, column=2, sticky="w")
 
         # format selection dropdown (video and audio formats are visually separated)
         # and allow entering a custom format string.
@@ -862,6 +883,14 @@ class YTDLPGui(tk.Tk):
             self.resolution_custom_var.set("")
         # we do not alter output_template or other user text; presets focus on
         # core format/resolution choices for the moment.
+
+    def apply_output_template_preset(self, _=None):
+        """Apply a user-facing output template preset to the output field."""
+        name = self.output_template_preset_var.get()
+        template = self.OUTPUT_TEMPLATE_PRESETS.get(name, "")
+        # always update the entry so the user can still edit it after selecting
+        # a preset.
+        self.output_template.set(template)
 
     def apply_sb_preset(self, _=None):
         """Set SponsorBlock fields according to the selected SB_PRESETS entry.
