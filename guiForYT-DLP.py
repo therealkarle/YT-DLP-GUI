@@ -193,8 +193,9 @@ class YTDLPGui(tk.Tk):
     def _to_portable_subdir(self, raw_value: str, runtime_dir: str, default: str = "Output") -> str:
         """Normalize an output folder value into a portable subdirectory.
 
-        Absolute paths outside runtime_dir are folded into a local folder name
-        so output remains portable.
+        * If the value is empty, return a sensible default.
+        * If the value points inside the runtime_dir, return it relative to runtime_dir.
+        * Otherwise, keep the absolute path so the user can select folders anywhere.
         """
         value = os.path.expanduser(os.path.expandvars((raw_value or "").strip()))
         if not value:
@@ -206,9 +207,9 @@ class YTDLPGui(tk.Tk):
                 if not rel.startswith("..") and not os.path.isabs(rel):
                     value = rel
                 else:
-                    value = os.path.basename(value.rstrip("\\/"))
+                    value = os.path.normpath(value)
             except Exception:
-                value = os.path.basename(value.rstrip("\\/"))
+                value = os.path.normpath(value)
 
         value = value.replace("\\", "/").strip("/")
         return value or default
@@ -717,15 +718,48 @@ class YTDLPGui(tk.Tk):
             self.cookies_file_var.set(path)
 
     def browse_output_dir(self):
-        path = filedialog.askdirectory(title="Select output folder")
+        runtime_dir = self.yt_dlp_runtime_dir()
+        # Start browsing from the last selection (if available), otherwise from the
+        # GUI script folder (more user-friendly than the internal runtime folder).
+        initial_dir = self.script_dir()
+        raw_selected_output = self.output_dir_var.get().strip()
+        if raw_selected_output:
+            candidate = os.path.join(runtime_dir, self._to_portable_subdir(raw_selected_output, runtime_dir))
+            if os.path.isdir(candidate):
+                initial_dir = candidate
+
+        path = filedialog.askdirectory(title="Select output folder", initialdir=initial_dir)
         if path:
-            runtime_dir = self.yt_dlp_runtime_dir()
-            portable_subdir = self._to_portable_subdir(path, runtime_dir)
-            # show/store portable relative path in the UI field
-            self.output_dir_var.set(portable_subdir)
+            # When the user chooses a folder via the dialog, store the absolute path.
+            self.output_dir_var.set(path)
             # ensure the folder exists so yt-dlp can write into it
             try:
-                os.makedirs(os.path.join(runtime_dir, portable_subdir), exist_ok=True)
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                pass
+
+    def search_output_dir(self):
+        """Open the normal folder selection dialog pre-seeded with the output folder.
+
+        This uses the built-in file dialog (Explorer on Windows) so the user can
+        search/navigate and then click "Select Folder".
+        """
+        runtime_dir = self.yt_dlp_runtime_dir()
+
+        raw_selected_output = self.output_dir_var.get().strip()
+        initial_dir = self.script_dir()
+        if raw_selected_output:
+            abs_current = os.path.join(runtime_dir, self._to_portable_subdir(raw_selected_output, runtime_dir))
+            if os.path.isdir(abs_current):
+                initial_dir = abs_current
+
+        path = filedialog.askdirectory(title="Select output folder", initialdir=initial_dir)
+        if path:
+            # When the user chooses a folder via the dialog, store the absolute path.
+            self.output_dir_var.set(path)
+            # ensure the folder exists so yt-dlp can write into it
+            try:
+                os.makedirs(path, exist_ok=True)
             except Exception:
                 pass
 
@@ -773,6 +807,7 @@ class YTDLPGui(tk.Tk):
         ttk.Label(options_frame, text="Output folder:").grid(row=2, column=0, sticky="w")
         ttk.Entry(options_frame, textvariable=self.output_dir_var, width=30).grid(row=2, column=1, sticky="w")
         ttk.Button(options_frame, text="Browse...", command=self.browse_output_dir).grid(row=2, column=2, sticky="w")
+        ttk.Button(options_frame, text="Search...", command=self.search_output_dir).grid(row=2, column=3, sticky="w")
 
         # format selection dropdown (video and audio formats are visually separated)
         # and allow entering a custom format string.
@@ -1160,7 +1195,13 @@ class YTDLPGui(tk.Tk):
             # blank; we do not automatically reuse a previously saved folder.
             output_subdir = self._to_portable_subdir("", runtime_dir)
 
-        output_dir = os.path.join(runtime_dir, output_subdir)
+        # If the chosen output folder is absolute, respect it; otherwise place it
+        # relative to the yt-dlp runtime directory.
+        if os.path.isabs(output_subdir):
+            output_dir = output_subdir
+        else:
+            output_dir = os.path.join(runtime_dir, output_subdir)
+
         try:
             os.makedirs(output_dir, exist_ok=True)
         except Exception:
