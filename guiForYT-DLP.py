@@ -136,6 +136,130 @@ class YTDLPGui(tk.Tk):
             return os.path.dirname(os.path.abspath(sys.executable))
         return os.path.dirname(os.path.abspath(__file__))
 
+    def resolve_yt_dlp_path(self) -> str:
+        """Return the best yt-dlp executable path for this portable GUI.
+
+        * If the config value is an absolute path, return it unchanged.
+        * If it is relative, prefer a file next to the GUI script.
+        * Otherwise fall back to searching the system PATH.
+        """
+        configured = self.config.get("yt_dlp_path", "yt-dlp.exe")
+        # if it is already absolute, trust it
+        if os.path.isabs(configured):
+            return configured
+        # prefer a local copy next to the GUI script for portability
+        local = os.path.join(self.script_dir(), configured)
+        if os.path.isfile(local):
+            return local
+        # fallback to PATH
+        found = shutil.which(configured)
+        if found:
+            return found
+        # last resort: return the original value (may be relative)
+        return configured
+
+    def yt_dlp_runtime_dir(self) -> str:
+        """Return the directory that should be treated as yt-dlp home base.
+
+        This is derived from the executable we are actually going to run.
+        If the executable cannot be resolved to an absolute location, we fall
+        back to the GUI script directory.
+        """
+        exe_path = self.resolve_yt_dlp_path()
+        if os.path.isabs(exe_path):
+            return os.path.dirname(exe_path)
+
+        local_candidate = os.path.join(self.script_dir(), exe_path)
+        if os.path.isfile(local_candidate):
+            return os.path.dirname(local_candidate)
+
+        return self.script_dir()
+
+    def _portable_runtime_paths(self) -> tuple[str, str, str]:
+        """Return normalized runtime, temp and cache directories for yt-dlp."""
+        runtime_dir = os.path.abspath(self.yt_dlp_runtime_dir())
+        temp_dir = os.path.join(runtime_dir, "yt-dlp-temp")
+        cache_dir = os.path.join(runtime_dir, "yt-dlp-cache")
+
+        for path in (temp_dir, cache_dir):
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                # yt-dlp can still attempt creation; we avoid hard-failing UI.
+                pass
+
+        return runtime_dir, temp_dir, cache_dir
+
+    def _to_portable_subdir(self, raw_value: str, runtime_dir: str, default: str = "Output") -> str:
+        """Normalize an output folder value into a portable subdirectory.
+
+        Absolute paths outside runtime_dir are folded into a local folder name
+        so output remains portable.
+        """
+        value = os.path.expanduser(os.path.expandvars((raw_value or "").strip()))
+        if not value:
+            return default
+
+        if os.path.isabs(value):
+            try:
+                rel = os.path.relpath(value, runtime_dir)
+                if not rel.startswith("..") and not os.path.isabs(rel):
+                    value = rel
+                else:
+                    value = os.path.basename(value.rstrip("\\/"))
+            except Exception:
+                value = os.path.basename(value.rstrip("\\/"))
+
+        value = value.replace("\\", "/").strip("/")
+        return value or default
+
+    def _args_have_path_type(self, args: list[str], path_type: str) -> bool:
+        """Return whether args already contain -P/--paths for a given type."""
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            spec = None
+            if arg in ("-P", "--paths") and i + 1 < len(args):
+                spec = args[i + 1]
+                i += 1
+            elif arg.startswith("--paths="):
+                spec = arg.split("=", 1)[1]
+
+            if spec is not None:
+                if path_type == "home":
+                    if ":" not in spec or spec.startswith("home:"):
+                        return True
+                elif spec.startswith(f"{path_type}:"):
+                    return True
+            i += 1
+        return False
+
+    def _args_have_cache_option(self, args: list[str]) -> bool:
+        return (
+            "--cache-dir" in args
+            or "--no-cache-dir" in args
+            or any(a.startswith("--cache-dir=") for a in args)
+        )
+
+    def ensure_portable_runtime_args(self, args: list[str], include_home: bool = True) -> list[str]:
+        """Prepend portability flags unless already explicitly set by user."""
+        runtime_dir, temp_dir, cache_dir = self._portable_runtime_paths()
+        runtime_norm = runtime_dir.replace("\\", "/")
+        temp_norm = temp_dir.replace("\\", "/")
+        cache_norm = cache_dir.replace("\\", "/")
+
+        prefix: list[str] = []
+        if "--ignore-config" not in args:
+            prefix.append("--ignore-config")
+        if not self._args_have_cache_option(args):
+            prefix += ["--cache-dir", cache_norm]
+        if include_home and not self._args_have_path_type(args, "home"):
+            prefix += ["-P", f"home:{runtime_norm}"]
+        if not self._args_have_path_type(args, "temp"):
+            prefix += ["-P", f"temp:{temp_norm}"]
+
+        return prefix + args
+
     def ffmpeg_dir(self):
         return os.path.join(self.script_dir(), "ffmpeg")
 
@@ -479,14 +603,19 @@ class YTDLPGui(tk.Tk):
             opts = self.collect_options()
 
         # build the command used only for filename determination
-        check_cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe"),
-                     "--get-filename"]
+        exe_path = self.resolve_yt_dlp_path()
+        check_cmd = [exe_path, "--get-filename"]
         # ``opts`` may already contain ``-o``; that is fine
         check_cmd.extend(opts)
         check_cmd.append(url)
 
         try:
-            proc = subprocess.run(check_cmd, capture_output=True, text=True)
+            proc = subprocess.run(
+                check_cmd,
+                capture_output=True,
+                text=True,
+                cwd=self.yt_dlp_runtime_dir(),
+            )
             if proc.returncode != 0:
                 # something went wrong; let yt-dlp handle the normal run
                 return True
@@ -494,7 +623,7 @@ class YTDLPGui(tk.Tk):
             if not filename:
                 return True
             if not os.path.isabs(filename):
-                filename = os.path.join(os.getcwd(), filename)
+                filename = os.path.join(self.yt_dlp_runtime_dir(), filename)
             if os.path.exists(filename):
                 self.log(f"Existing file detected: {filename}")
                 # custom dialog so we can control the button text
@@ -590,11 +719,13 @@ class YTDLPGui(tk.Tk):
     def browse_output_dir(self):
         path = filedialog.askdirectory(title="Select output folder")
         if path:
-            # normalize and persist the selected folder; it will be saved to config
-            self.output_dir_var.set(path)
+            runtime_dir = self.yt_dlp_runtime_dir()
+            portable_subdir = self._to_portable_subdir(path, runtime_dir)
+            # show/store portable relative path in the UI field
+            self.output_dir_var.set(portable_subdir)
             # ensure the folder exists so yt-dlp can write into it
             try:
-                os.makedirs(path, exist_ok=True)
+                os.makedirs(os.path.join(runtime_dir, portable_subdir), exist_ok=True)
             except Exception:
                 pass
 
@@ -1010,55 +1141,50 @@ class YTDLPGui(tk.Tk):
         opts = []
         current_preset = self.preset_var.get()
 
-        # determine the effective output directory.
-        # If the user left the output folder blank, default to <scriptdir>/Output
-        # but do not persist this default selection (so the field stays empty).
-        output_dir = self.output_dir_var.get().strip()
-        if not output_dir:
-            # use the last saved folder if the user hasn't typed anything
-            output_dir = self.config.get("last_output_dir", "")
-        # treat relative paths as relative to the script directory
-        if output_dir and not os.path.isabs(output_dir):
-            output_dir = os.path.join(self.script_dir(), output_dir)
-        if not output_dir:
-            output_dir = os.path.join(self.script_dir(), "Output")
-        output_dir = os.path.expanduser(os.path.expandvars(output_dir))
+        # Build a portable runtime context for yt-dlp so no user/appdata config
+        # and no system temp folders influence the run.
+        runtime_dir, _temp_dir, _cache_dir = self._portable_runtime_paths()
+        opts += self.ensure_portable_runtime_args([])
+
+        raw_selected_output = self.output_dir_var.get().strip()
+        if raw_selected_output:
+            output_subdir = self._to_portable_subdir(raw_selected_output, runtime_dir)
+        else:
+            # Default output folder must always be "Output" when the field is
+            # blank; we do not automatically reuse a previously saved folder.
+            output_subdir = self._to_portable_subdir("", runtime_dir)
+
+        output_dir = os.path.join(runtime_dir, output_subdir)
         try:
             os.makedirs(output_dir, exist_ok=True)
         except Exception:
             pass
 
-        # build the output template (yt-dlp -o).
-        # If the user provided a custom template, keep it but treat relative
-        # templates as relative to the selected output folder.
-        output_template = self.output_template.get().strip()
-        if output_template:
-            if not os.path.isabs(output_template):
-                output_template = os.path.join(output_dir, output_template)
-        else:
-            output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
-        # normalize backslashes for yt-dlp argument parsing on Windows
-        output_template = output_template.replace("\\", "/")
-        opts += ["-o", output_template]
+        # Build output template relative to yt-dlp home path (-P home:<runtime>).
+        output_template_input = self.output_template.get().strip()
+        template_rel = output_template_input if output_template_input else "%(title)s.%(ext)s"
+
+        expanded_template = os.path.expanduser(os.path.expandvars(template_rel))
+        if os.path.isabs(expanded_template):
+            try:
+                rel_template = os.path.relpath(expanded_template, runtime_dir)
+                if not rel_template.startswith("..") and not os.path.isabs(rel_template):
+                    template_rel = rel_template
+                else:
+                    template_rel = os.path.basename(expanded_template)
+            except Exception:
+                template_rel = os.path.basename(expanded_template)
+
+        template_rel = (template_rel or "%(title)s.%(ext)s").replace("\\", "/").lstrip("/")
+        out_prefix = output_subdir.replace("\\", "/").strip("/")
+        if out_prefix and not template_rel.startswith(f"{out_prefix}/"):
+            template_rel = f"{out_prefix}/{template_rel}"
+
+        opts += ["-o", template_rel]
 
         # remember selection for next run only when the user explicitly chose it
-        if self.output_dir_var.get().strip():
-            selected = self.output_dir_var.get().strip()
-            # store relative to script dir when possible so moving the app keeps
-            # the setting valid.
-            if not os.path.isabs(selected):
-                self.config["last_output_dir"] = selected
-            else:
-                try:
-                    # normalize to a relative path when contained inside script dir
-                    script_dir = os.path.abspath(self.script_dir())
-                    common = os.path.commonpath([script_dir, os.path.abspath(selected)])
-                    if common == script_dir:
-                        self.config["last_output_dir"] = os.path.relpath(selected, script_dir)
-                    else:
-                        self.config["last_output_dir"] = selected
-                except Exception:
-                    self.config["last_output_dir"] = selected
+        if raw_selected_output:
+            self.config["last_output_dir"] = output_subdir
 
         fmt = self.format_var.get()
         res = self.resolution_var.get()
@@ -1178,7 +1304,13 @@ class YTDLPGui(tk.Tk):
 
     def run_subprocess(self, cmd):
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                cwd=self.yt_dlp_runtime_dir(),
+            )
             self.current_proc = proc
             # stdout is guaranteed when we pass PIPE, but the type stubs mark it
             # as Optional[TextIO].  Assert to keep Pylance happy.
@@ -1234,7 +1366,9 @@ class YTDLPGui(tk.Tk):
                 messagebox.showwarning("No command", "Please enter yt-dlp command arguments in the log field.")
                 return
             args = shlex.split(command_line)
-            cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")] + args
+            args = self.ensure_portable_runtime_args(args)
+            exe_path = self.resolve_yt_dlp_path()
+            cmd = [exe_path] + args
         else:
             url = self.url_var.get().strip()
             if not url:
@@ -1261,7 +1395,8 @@ class YTDLPGui(tk.Tk):
                     return
             # build the final command after the overwrite check so that any
             # mutation of ``opts`` (e.g. adding --force-overwrites) is included
-            cmd = [self.config.get("yt_dlp_path", "yt-dlp.exe")]
+            exe_path = self.resolve_yt_dlp_path()
+            cmd = [exe_path]
             cmd += opts
             cmd.append(url)
         # enforce critical dependencies are present; pop up error and abort if not
@@ -1294,7 +1429,7 @@ class YTDLPGui(tk.Tk):
 
         This is run in a background thread so the UI remains responsive.
         """
-        exe_path = self.config.get("yt_dlp_path", "yt-dlp.exe")
+        exe_path = self.resolve_yt_dlp_path()
         def worker():
             if os.path.isfile(exe_path):
                 self.log(f"Updating yt-dlp using executable: {exe_path}")
@@ -1347,6 +1482,9 @@ class YTDLPGui(tk.Tk):
                 import urllib.request
                 urllib.request.urlretrieve(url, dest)
                 self.log(f"Downloaded yt-dlp.exe to {dest}")
+                # Prefer the downloaded local copy for portability
+                self.config["yt_dlp_path"] = "yt-dlp.exe"
+                self.save_config()
                 messagebox.showinfo("Downloaded", f"yt-dlp.exe saved to:\n{dest}")
             except Exception as e:
                 self.log(f"Error downloading yt-dlp.exe: {e}")
@@ -1576,7 +1714,7 @@ class DependenciesDialog(tk.Toplevel):
 
         # simple checks
         add_entry("yt-dlp executable",
-                  lambda: os.path.isfile(self.parent.config.get("yt_dlp_path", "yt-dlp.exe")),
+                  lambda: os.path.isfile(self.parent.resolve_yt_dlp_path()),
                   self.parent.install_or_update_yt_dlp)
 
         add_entry("yt-dlp Python package",

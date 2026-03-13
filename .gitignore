@@ -21,4 +21,10 @@ ffmpeg
 __pycache__
 .venv
 tests
+yt-dlp-cache
+
+#output
+Output
+yt-dlp-temp
+my-output
 
