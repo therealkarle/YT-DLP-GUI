@@ -1392,8 +1392,26 @@ class DependenciesDialog(tk.Toplevel):
             padx=5,
             pady=(10,5),
         )
+        ttk.Button(self, text="Refresh status", command=self.refresh_statuses).grid(
+            row=controls_row + 1,
+            column=0,
+            sticky="w",
+            padx=5,
+            pady=(0,5),
+        )
+
     def _status_color(self, status: str) -> str:
         return self.STATUS_INSTALLED_COLOR if status == "Installed" else self.STATUS_MISSING_COLOR
+
+    def _refresh_status(self, check_fn, status_var, status_label):
+        installed = check_fn()
+        status = "Installed" if installed else "Missing"
+        status_var.set(status)
+        status_label.configure(fg=self._status_color(status))
+
+    def refresh_statuses(self):
+        for entry in self.deps:
+            self._refresh_status(entry["check"], entry["status_var"], entry["status_label"])
 
     def _run_action(self, check_fn, status_var, action_fn):
         action_fn()
@@ -1401,14 +1419,11 @@ class DependenciesDialog(tk.Toplevel):
         self._schedule_status_refresh(check_fn, status_var, status_label)
 
     def _schedule_status_refresh(self, check_fn, status_var, status_label):
-        def refresh():
-            installed = check_fn()
-            status = "Installed" if installed else "Missing"
-            status_var.set(status)
-            status_label.configure(fg=self._status_color(status))
-
         for delay_ms in (0, 1000, 3000):
-            self.after(delay_ms, refresh)
+            self.after(
+                delay_ms,
+                lambda cf=check_fn, sv=status_var, sl=status_label: self._refresh_status(cf, sv, sl),
+            )
 
     def install_all(self):
         for entry in self.deps:
