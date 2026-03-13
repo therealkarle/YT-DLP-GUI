@@ -941,8 +941,14 @@ class YTDLPGui(tk.Tk):
         # Log console (also used for raw command input when enabled)
         log_frame = ttk.LabelFrame(self, text="Log")
         log_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        self.log_text = tk.Text(log_frame, state="disabled", height=10)
-        self.log_text.pack(fill="both", expand=True)
+
+        # Add a scrollbar so users can quickly scroll through the log output.
+        self.log_text = tk.Text(log_frame, state="disabled", height=10, wrap="word")
+        log_scrollbar = ttk.Scrollbar(log_frame, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=log_scrollbar.set)
+
+        log_scrollbar.pack(side="right", fill="y")
+        self.log_text.pack(side="left", fill="both", expand=True)
 
         # load last options if any
         self.apply_last_options()
