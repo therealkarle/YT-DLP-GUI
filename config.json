@@ -1,12 +1,19 @@
 {
   "yt_dlp_path": "yt-dlp.exe",
   "ask_overwrite": true,
+  "last_output_dir": "C:\\Users\\flori\\AppData\\Local\\Temp\\pytest-of-flori\\pytest-44\\test_collect_options_saves_out0\\my-output",
   "last_options": {
     "format": "mp4",
+    "format_custom": "",
     "resolution": "1080",
+    "resolution_custom": "",
     "extra": "",
     "cookies_file": "",
     "cookies_browser": "firefox",
+    "trim_start": "",
+    "trim_start_mode": "Timestamp",
+    "trim_end": "",
+    "trim_end_mode": "Timestamp",
     "sb_preset": "Remove sponsors"
   }
 }

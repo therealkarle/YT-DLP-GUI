@@ -59,6 +59,8 @@ DEFAULT_CONFIG = {
     "yt_dlp_path": "yt-dlp.exe",
     # whether to ask the user before re-downloading an already existing file
     "ask_overwrite": True,
+    # last selected download/output folder (for -o template)
+    "last_output_dir": "",
     "last_options": {
         # previous options saved by collect_options; key names documented in
         # ``collect_options``.  cookies fields added for authentication.
@@ -585,6 +587,17 @@ class YTDLPGui(tk.Tk):
         if path:
             self.cookies_file_var.set(path)
 
+    def browse_output_dir(self):
+        path = filedialog.askdirectory(title="Select output folder")
+        if path:
+            # normalize and persist the selected folder; it will be saved to config
+            self.output_dir_var.set(path)
+            # ensure the folder exists so yt-dlp can write into it
+            try:
+                os.makedirs(path, exist_ok=True)
+            except Exception:
+                pass
+
     def create_widgets(self):
         # URL entry and run button
         top_frame = ttk.Frame(self)
@@ -625,13 +638,18 @@ class YTDLPGui(tk.Tk):
             command=self.apply_output_template_preset,
         ).grid(row=1, column=2, sticky="w")
 
+        self.output_dir_var = tk.StringVar()
+        ttk.Label(options_frame, text="Output folder:").grid(row=2, column=0, sticky="w")
+        ttk.Entry(options_frame, textvariable=self.output_dir_var, width=30).grid(row=2, column=1, sticky="w")
+        ttk.Button(options_frame, text="Browse...", command=self.browse_output_dir).grid(row=2, column=2, sticky="w")
+
         # format selection dropdown (video and audio formats are visually separated)
         # and allow entering a custom format string.
         self.format_var = tk.StringVar(value="best")
         self.format_custom_var = tk.StringVar()
-        ttk.Label(options_frame, text="Format:").grid(row=2, column=0, sticky="w")
+        ttk.Label(options_frame, text="Format:").grid(row=3, column=0, sticky="w")
         format_menu = ttk.OptionMenu(options_frame, self.format_var, "best")
-        format_menu.grid(row=2, column=1, sticky="w")
+        format_menu.grid(row=3, column=1, sticky="w")
         # Build menu so we can add non-selectable headers and a custom entry option
         format_menu_menu = format_menu["menu"]
         format_menu_menu.delete(0, "end")
@@ -657,13 +675,13 @@ class YTDLPGui(tk.Tk):
         # resolution selection dropdown (add 4k/1440 and allow custom value)
         self.resolution_var = tk.StringVar(value="best")
         self.resolution_custom_var = tk.StringVar()
-        ttk.Label(options_frame, text="Resolution:").grid(row=3, column=0, sticky="w")
+        ttk.Label(options_frame, text="Resolution:").grid(row=4, column=0, sticky="w")
         resolutions = ["best", "4k", "1440", "1080", "720", "480", "360", "240", "Custom"]
         resolution_menu = ttk.OptionMenu(options_frame, self.resolution_var, resolutions[0], *resolutions)
-        resolution_menu.grid(row=3, column=1, sticky="w")
+        resolution_menu.grid(row=4, column=1, sticky="w")
         self.resolution_custom_entry = ttk.Entry(options_frame, textvariable=self.resolution_custom_var,
                                                 width=20, state="disabled")
-        self.resolution_custom_entry.grid(row=3, column=2, sticky="w", padx=(5, 0))
+        self.resolution_custom_entry.grid(row=4, column=2, sticky="w", padx=(5, 0))
 
         def _update_resolution_custom(*_args):
             state = "normal" if self.resolution_var.get() == "Custom" else "disabled"
@@ -673,16 +691,16 @@ class YTDLPGui(tk.Tk):
         # authentication options (cookies)
         # users frequently need to supply a cookies file or pull from a browser
         self.cookies_file_var = tk.StringVar()
-        ttk.Label(options_frame, text="Cookies file:").grid(row=4, column=0, sticky="w")
-        ttk.Entry(options_frame, textvariable=self.cookies_file_var, width=40).grid(row=4, column=1, sticky="w")
-        ttk.Button(options_frame, text="Browse...", command=self.browse_cookies).grid(row=4, column=2, sticky="w")
+        ttk.Label(options_frame, text="Cookies file:").grid(row=5, column=0, sticky="w")
+        ttk.Entry(options_frame, textvariable=self.cookies_file_var, width=40).grid(row=5, column=1, sticky="w")
+        ttk.Button(options_frame, text="Browse...", command=self.browse_cookies).grid(row=5, column=2, sticky="w")
 
         self.cookies_browser_var = tk.StringVar(value="None")
         lbl_browser = ttk.Label(options_frame, text="Cookies from browser:")
-        lbl_browser.grid(row=5, column=0, sticky="w")
+        lbl_browser.grid(row=6, column=0, sticky="w")
         ToolTip(lbl_browser, "Ignored if a cookies file is provided above.")
         browsers = ["None", "chrome", "firefox", "edge", "safari"]
-        ttk.OptionMenu(options_frame, self.cookies_browser_var, browsers[0], *browsers).grid(row=5, column=1, sticky="w")
+        ttk.OptionMenu(options_frame, self.cookies_browser_var, browsers[0], *browsers).grid(row=6, column=1, sticky="w")
 
         # ---------- playlist options ----------
         playlist_frame = ttk.LabelFrame(self, text="Playlist options")
@@ -804,6 +822,12 @@ class YTDLPGui(tk.Tk):
         # nothing is provided.  We deliberately do *not* restore a previously
         # saved template.
         self.output_template.set("")
+
+        # leave the output folder field blank on startup.
+        # (we still use the last saved folder internally when running ytdlp,
+        # but we don't prefill the UI field automatically.)
+        self.output_dir_var.set("")
+
         opts = self.config.get("last_options", {})
         # restore format selection; preserve custom input if present
         fmt = opts.get("format", "best")
@@ -985,8 +1009,56 @@ class YTDLPGui(tk.Tk):
     def collect_options(self):
         opts = []
         current_preset = self.preset_var.get()
-        if self.output_template.get():
-            opts += ["-o", self.output_template.get()]
+
+        # determine the effective output directory.
+        # If the user left the output folder blank, default to <scriptdir>/Output
+        # but do not persist this default selection (so the field stays empty).
+        output_dir = self.output_dir_var.get().strip()
+        if not output_dir:
+            # use the last saved folder if the user hasn't typed anything
+            output_dir = self.config.get("last_output_dir", "")
+        # treat relative paths as relative to the script directory
+        if output_dir and not os.path.isabs(output_dir):
+            output_dir = os.path.join(self.script_dir(), output_dir)
+        if not output_dir:
+            output_dir = os.path.join(self.script_dir(), "Output")
+        output_dir = os.path.expanduser(os.path.expandvars(output_dir))
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        # build the output template (yt-dlp -o).
+        # If the user provided a custom template, keep it but treat relative
+        # templates as relative to the selected output folder.
+        output_template = self.output_template.get().strip()
+        if output_template:
+            if not os.path.isabs(output_template):
+                output_template = os.path.join(output_dir, output_template)
+        else:
+            output_template = os.path.join(output_dir, "%(title)s.%(ext)s")
+        # normalize backslashes for yt-dlp argument parsing on Windows
+        output_template = output_template.replace("\\", "/")
+        opts += ["-o", output_template]
+
+        # remember selection for next run only when the user explicitly chose it
+        if self.output_dir_var.get().strip():
+            selected = self.output_dir_var.get().strip()
+            # store relative to script dir when possible so moving the app keeps
+            # the setting valid.
+            if not os.path.isabs(selected):
+                self.config["last_output_dir"] = selected
+            else:
+                try:
+                    # normalize to a relative path when contained inside script dir
+                    script_dir = os.path.abspath(self.script_dir())
+                    common = os.path.commonpath([script_dir, os.path.abspath(selected)])
+                    if common == script_dir:
+                        self.config["last_output_dir"] = os.path.relpath(selected, script_dir)
+                    else:
+                        self.config["last_output_dir"] = selected
+                except Exception:
+                    self.config["last_output_dir"] = selected
 
         fmt = self.format_var.get()
         res = self.resolution_var.get()
