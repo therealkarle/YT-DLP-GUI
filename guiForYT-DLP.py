@@ -1255,16 +1255,9 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(self, text="Ask before overwriting existing files",
                         variable=self.ask_overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
 
-        ttk.Label(self, text="Dependencies:").grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
-        # individual installers
-        ttk.Button(self, text="Install/Update yt-dlp", command=self.parent.install_or_update_yt_dlp).grid(row=3, column=0, sticky="w", padx=2, pady=2)
-        ttk.Button(self, text="Install external deps", command=self.parent.run_install_deps_script).grid(row=3, column=1, sticky="w", padx=2, pady=2)
-        ttk.Button(self, text="Download devscripts folder", command=self.parent.download_devscripts).grid(row=3, column=2, sticky="w", padx=2, pady=2)
-        # manage dialog entry below
-        ttk.Button(self, text="Manage dependencies...", command=self.open_dependencies).grid(row=4, column=0, columnspan=3, sticky="w", padx=5, pady=(5,2))
-        # helpful link for JavaScript runtimes required by YouTube
-        ttk.Button(self, text="JS runtime info", command=self.open_js_help).grid(row=5, column=0, columnspan=3, sticky="w", padx=5, pady=(10,2))
-        ttk.Button(self, text="OK", command=self.on_ok).grid(row=6, column=1, pady=5)
+        # dependency management entry point
+        ttk.Button(self, text="Dependencies", command=self.open_dependencies).grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,5))
+        ttk.Button(self, text="OK", command=self.on_ok).grid(row=3, column=1, pady=5)
 
 
     def browse(self):
