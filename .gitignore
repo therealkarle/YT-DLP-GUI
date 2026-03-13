@@ -4,6 +4,7 @@ install_deps.py
 help.txt
 pyproject.toml
 devscripts/
+guiForYT-DLP.py - Verknüpfung.lnk
 
 #other dependency scripts
 ffmpeg.exe

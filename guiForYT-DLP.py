@@ -864,34 +864,6 @@ class YTDLPGui(tk.Tk):
         self.trim_end_var.set(opts.get("trim_end", ""))
         self.trim_end_mode_var.set(opts.get("trim_end_mode", "Timestamp"))
 
-    def toggle_sb_frame(self):
-        """Show or hide the SponsorBlock options frame based on the checkbox.
-
-        The checkbox is linked to :attr:`sb_enabled_var`.  When unchecked we
-        simply forget the frame so the whole section collapses; when checked we
-        repack it immediately before the extra‑arguments area so it appears
-        directly under the checkbox instead of at the bottom of the window.
-
-        As a usability nicety, when the user enables SponsorBlock and no remove
-        categories have been set yet we default to removing "sponsor" entries.
-        """
-        if self.sb_enabled_var.get():
-            # set a sensible default if nothing specified yet
-            if not self.sb_remove_var.get():
-                self.sb_remove_var.set("sponsor")
-            # select a matching preset if currently the first ("None") entry
-            first = list(self.SB_PRESETS.keys())[0]
-            if self.sb_preset_var.get() == first:
-                # default to the simple "Remove sponsors" preset
-                self.sb_preset_var.set("Remove sponsors")
-                self.apply_sb_preset()
-            # ensure the extra_frame attribute exists (created later) before
-            # we try to reference it; the checkbox will only be usable once the
-            # whole GUI is built so this is safe.
-            self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
-        else:
-            self.sb_frame.pack_forget()
-
     def toggle_trim_frame(self):
         """Show or hide the Trim options frame when the checkbox changes."""
         # Keep ordering consistent: Trim should always appear above SponsorBlock.
