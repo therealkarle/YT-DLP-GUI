@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog
 import json
 import os
 import platform
+import queue
 import subprocess
 import threading
 import sys
@@ -118,6 +119,12 @@ class YTDLPGui(tk.Tk):
 
         self.load_config()
         self.create_widgets()
+
+        # Log output from worker threads is written to a queue and flushed on the
+        # main/UI thread via ``after``. This prevents Tkinter from getting updated
+        # from a background thread (which can cause freezes/stalls).
+        self._log_queue = queue.Queue()
+        self.after(100, self._process_log_queue)
 
     def _inspect_click(self, event):
         """If inspect mode is enabled, open the object browser for the clicked widget."""
@@ -1391,10 +1398,53 @@ class YTDLPGui(tk.Tk):
             self.current_proc = None
 
     def log(self, message):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", message + "\n")
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
+        """Log a message to the UI log panel.
+
+        This method is safe to call from worker threads by enqueueing the
+        message; the UI thread periodically flushes the queue.
+        """
+        try:
+            self._log_queue.put_nowait(message)
+        except Exception:
+            # If something goes wrong (e.g. called before init finishes),
+            # fall back to a best-effort direct update.
+            try:
+                self.log_text.configure(state="normal")
+                self.log_text.insert("end", message + "\n")
+                self.log_text.see("end")
+                self.log_text.configure(state="disabled")
+            except Exception:
+                pass
+
+    def _process_log_queue(self):
+        """Flush queued log messages into the log widget on the main thread."""
+        # Drain the queue (non-blocking) to minimize GUI churn.
+        messages = []
+        while True:
+            try:
+                messages.append(self._log_queue.get_nowait())
+            except queue.Empty:
+                break
+
+        if messages:
+            self.log_text.configure(state="normal")
+            self.log_text.insert("end", "\n".join(messages) + "\n")
+            # Keep log size bounded to avoid excessive slowdown.
+            max_lines = 2000
+            line_count = int(self.log_text.index("end-1c").split(".")[0])
+            if line_count > max_lines:
+                # Remove the oldest lines.
+                remove_lines = line_count - max_lines
+                self.log_text.delete("1.0", f"{remove_lines + 1}.0")
+            self.log_text.see("end")
+            self.log_text.configure(state="disabled")
+
+        # Reschedule the next flush.  Always keep this running for the lifetime
+        # of the window.
+        try:
+            self.after(100, self._process_log_queue)
+        except Exception:
+            pass
 
     def open_settings(self):
         SettingsDialog(self)
