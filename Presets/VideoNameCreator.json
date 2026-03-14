@@ -1,0 +1,5 @@
+{
+  "type": "output_template",
+  "name": "VideoNameCreator",
+  "data": "%(title)s_%(uploader)s_"
+}

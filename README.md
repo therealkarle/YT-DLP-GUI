@@ -194,6 +194,42 @@ The playlist section controls yt-dlp playlist behavior:
 
 ---
 
+## Cuton-Presets
+
+Cuton‑Presets sind JSON‑Dateien, die Voreinstellungen für verschiedene Bereiche der GUI speichern (z. B. vollständige Presets, Output‑Template, SponsorBlock und Extra‑Argumente). Standardmäßig werden Presets im Ordner `Presets/` im Skript‑Verzeichnis abgelegt; weitere Ordner können in den Einstellungen unter "Preset directories" hinzugefügt werden.
+
+- Typen:
+  - `full` — speichert alle GUI‑Einstellungen (Format, Auflösung, Output‑Template, Output‑Ordner, Playlist‑Optionen, Cookies, Trim/Cut (Start/End), SponsorBlock, Extra‑Args usw.).
+  - `output_template` — speichert nur die Output‑Template‑Zeichenkette.
+  - `sponsorblock` — speichert SponsorBlock‑Konfigurationen (z. B. entfernen/markieren, Kategorien, API‑URL).
+  - `extra` — speichert nur den Inhalt der "Extra arguments"‑Textbox.
+
+- Dateiformat:
+  - Jede Preset‑Datei ist JSON und enthält nur die Felder `type` und `data` (das Feld `name` wird nicht mehr verwendet). Der in der GUI angezeigte Preset‑Name wird aus dem Dateinamen (ohne `.json`) abgeleitet.
+  - Beispiel (vollständiges Preset mit Trim/Cut):
+
+```json
+{
+  "type": "full",
+  "data": {
+    "format": "mp4",
+    "resolution": "1080",
+    "output_template": "%(title)s.%(ext)s",
+    "output_dir": "my-output",
+    "extra_args": "--no-mtime",
+    "playlist": { "yes": true, "items": "1:5" },
+    "trim": { "enabled": true, "start": "00:00:30", "end": "00:05:00" },
+    "sponsorblock": { "enabled": true, "remove": ["sponsor"] }
+  }
+}
+```
+
+- Verwendung:
+  - Preset speichern: Einstellungen setzen und auf „Save Preset“ (für vollständige Presets) oder den jeweiligen „Save … Preset“‑Button neben Output‑Template / SponsorBlock / Extra klicken.
+  - Preset anwenden: aus dem entsprechenden Dropdown auswählen.
+  - Presets verwalten: Einstellungen → Preset directories zum Hinzufügen/Entfernen von Ordnern nutzen. `Refresh Presets` aktualisiert die Listen in der GUI.
+  - Hinweis: Altes JSON‑Format wird beim Laden weiterhin erkannt; beim Speichern neuer Presets wird das Feld `name` nicht geschrieben.
+
 ## ❤️ Thanks
 
 This project is built on top of the amazing yt-dlp project. If you find it useful, consider starring the upstream repository ⭐ and supporting the maintainers.

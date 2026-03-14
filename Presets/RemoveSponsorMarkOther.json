@@ -1,0 +1,9 @@
+{
+  "type": "sponsorblock",
+  "data": {
+    "mark": "selfpromo,interaction,intro,outro,preview",
+    "remove": "sponsor",
+    "title": "",
+    "api": ""
+  }
+}

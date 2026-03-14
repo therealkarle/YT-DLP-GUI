@@ -62,6 +62,9 @@ DEFAULT_CONFIG = {
     "ask_overwrite": True,
     # last selected download/output folder (for -o template)
     "last_output_dir": "",
+    # directories containing user-defined preset files (JSON)
+    # relative paths are resolved relative to the script directory.
+    "preset_dirs": ["Presets"],
     "last_options": {
         # previous options saved by collect_options; key names documented in
         # ``collect_options``.  cookies fields added for authentication.
@@ -118,6 +121,8 @@ class YTDLPGui(tk.Tk):
         self.bind_all("<Button-1>", self._inspect_click, add="+")
 
         self.load_config()
+        self.ensure_preset_dirs()
+        self.load_user_presets()
         self.create_widgets()
 
         # Log output from worker threads is written to a queue and flushed on the
@@ -148,6 +153,10 @@ class YTDLPGui(tk.Tk):
                     self.config.update(json.load(f))
         except Exception as e:
             print(f"Failed to load config: {e}")
+
+        # Ensure preset_dirs always exists for backward compatibility.
+        if "preset_dirs" not in self.config or not isinstance(self.config.get("preset_dirs"), list):
+            self.config["preset_dirs"] = ["Presets"]
 
     def save_config(self):
         try:
@@ -200,6 +209,325 @@ class YTDLPGui(tk.Tk):
             return os.path.dirname(local_candidate)
 
         return self.script_dir()
+
+    def preset_dirs(self) -> list[str]:
+        """Return the list of configured preset directories as absolute paths.
+
+        Relative paths are resolved relative to the script directory. Any
+        user-provided environment variables (e.g. %APPDATA%) are expanded.
+        """
+        dirs = self.config.get("preset_dirs", []) or []
+        out = []
+        for d in dirs:
+            if not isinstance(d, str) or not d.strip():
+                continue
+            expanded = os.path.expanduser(os.path.expandvars(d))
+            if not os.path.isabs(expanded):
+                expanded = os.path.join(self.script_dir(), expanded)
+            out.append(os.path.normpath(expanded))
+        return out
+
+    def ensure_preset_dirs(self):
+        """Create configured preset directories if they don't exist."""
+        for d in self.preset_dirs():
+            try:
+                os.makedirs(d, exist_ok=True)
+            except Exception:
+                # Ignore failures (may be permission issues); we will just
+                # skip those directories later.
+                pass
+
+    def load_user_presets(self):
+        """Load presets from configured preset directories."""
+        # Start with built-in presets then merge user presets.
+        self.presets = dict(self.PRESETS)
+        self.output_template_presets = dict(self.OUTPUT_TEMPLATE_PRESETS)
+        self.sb_presets = dict(self.SB_PRESETS)
+        self.extra_presets = {"Custom": ""}
+
+        for preset_dir in self.preset_dirs():
+            try:
+                for fn in os.listdir(preset_dir):
+                    if not fn.lower().endswith(".json"):
+                        continue
+                    path = os.path.join(preset_dir, fn)
+                    preset = self._load_preset_file(path)
+                    if not preset:
+                        continue
+                    self._register_preset(preset, source_path=path)
+            except Exception:
+                # Ignore unreadable directories
+                continue
+
+    def _load_preset_file(self, path: str) -> dict | None:
+        """Load and normalize a preset file.
+
+        Supports both the new format (with explicit "type") and some older
+        variants where only a value was stored.
+
+        Returns a dict with keys: type, name, data.
+        """
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                obj = json.load(f)
+        except Exception:
+            self.log(f"Skipping invalid preset file: {path}")
+            return None
+
+        if isinstance(obj, str):
+            return {
+                "type": "output_template",
+                "name": os.path.splitext(os.path.basename(path))[0],
+                "data": obj,
+                "path": path,
+            }
+
+        if not isinstance(obj, dict):
+            self.log(f"Skipping preset with unsupported type in file: {path}")
+            return None
+
+        preset_type = obj.get("type")
+        if preset_type not in ("full", "output_template", "sponsorblock", "extra"):
+            # Try to infer type from the content.
+            data_guess = obj.get("data", obj)
+            if isinstance(data_guess, str):
+                preset_type = "extra"
+            elif isinstance(data_guess, dict):
+                if any(k in data_guess for k in ("mark", "remove", "title", "api")):
+                    preset_type = "sponsorblock"
+                else:
+                    preset_type = "full"
+            else:
+                return None
+
+        # Preset name is always derived from the filename.
+        name = os.path.splitext(os.path.basename(path))[0]
+
+        data = obj.get("data")
+        if data is None:
+            # For backwards compatibility, allow old presets that stored
+            # the value directly at the top level.
+            data = obj
+
+        return {"type": preset_type, "name": name, "data": data, "path": path}
+
+    def _register_preset(self, preset: dict, source_path: str | None = None):
+        """Register a loaded preset into the appropriate in-memory preset store."""
+        name = preset["name"]
+        store = self._preset_store_for_type(preset["type"])
+
+        # Prefer built-in presets over user-defined ones.
+        builtin_names = {
+            "full": set(self.PRESETS.keys()),
+            "output_template": set(self.OUTPUT_TEMPLATE_PRESETS.keys()),
+            "sponsorblock": set(self.SB_PRESETS.keys()),
+        }.get(preset["type"], set())
+
+        if name in builtin_names:
+            name = f"{name} (custom)"
+
+        # Avoid collisions between multiple user presets.
+        orig_name = name
+        i = 2
+        while name in store:
+            name = f"{orig_name} ({i})"
+            i += 1
+
+        store[name] = preset["data"]
+        return name
+
+    def _preset_store_for_type(self, preset_type: str) -> dict:
+        if preset_type == "full":
+            return self.presets
+        if preset_type == "output_template":
+            return self.output_template_presets
+        if preset_type == "sponsorblock":
+            return self.sb_presets
+        if preset_type == "extra":
+            return self.extra_presets
+        return {}
+
+    def _preset_menu_for_type(self, preset_type: str):
+        if preset_type == "full":
+            return getattr(self, "preset_menu", None)
+        if preset_type == "output_template":
+            return getattr(self, "output_template_menu", None)
+        if preset_type == "sponsorblock":
+            return getattr(self, "sb_preset_menu", None)
+        if preset_type == "extra":
+            return getattr(self, "extra_preset_menu", None)
+        return None
+
+    def _refresh_preset_menu(self, preset_type: str):
+        """Update the OptionMenu for the given preset type."""
+        menu_widget = self._preset_menu_for_type(preset_type)
+        if menu_widget is None:
+            return
+        menu = menu_widget["menu"]
+        menu.delete(0, "end")
+        store = self._preset_store_for_type(preset_type)
+        for name in store.keys():
+            menu.add_command(
+                label=name,
+                command=lambda n=name, t=preset_type: self._on_preset_selected(t, n),
+            )
+
+    def _on_preset_selected(self, preset_type: str, name: str):
+        if preset_type == "full":
+            self.preset_var.set(name)
+            self.apply_preset()
+        elif preset_type == "output_template":
+            self.output_template_preset_var.set(name)
+            self.apply_output_template_preset()
+        elif preset_type == "sponsorblock":
+            self.sb_preset_var.set(name)
+            self.apply_sb_preset()
+
+    def save_preset_to_file(self, preset_type: str, data, name: str | None = None):
+        """Save a preset to a JSON file, asking the user where to write it."""
+        initial_dir = self.preset_dirs()[0] if self.preset_dirs() else self.script_dir()
+        prompt = {
+            "full": "Save preset",  # in case we later add a full preset saver
+            "output_template": "Save output template preset",
+            "sponsorblock": "Save SponsorBlock preset",
+        }.get(preset_type, "Save preset")
+        path = filedialog.asksaveasfilename(
+            title=prompt,
+            initialdir=initial_dir,
+            defaultextension=".json",
+            filetypes=[("YT-DLP GUI preset", "*.json")],
+        )
+        if not path:
+            return
+        # Ensure the parent directory exists.
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        except Exception:
+            pass
+        if not name:
+            name = os.path.splitext(os.path.basename(path))[0]
+        # The preset name is derived from the filename; do not write it into JSON.
+        obj = {"type": preset_type, "data": data}
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(obj, f, indent=2)
+        except Exception as e:
+            messagebox.showerror("Save preset", f"Failed to save preset:\n{e}")
+            return
+
+        # If the user saved outside the current preset folders, add it so it is
+        # automatically found on refresh (and on next start).
+        saved_dir = os.path.normpath(os.path.dirname(path))
+        existing = [os.path.normpath(d) for d in self.preset_dirs()]
+        if saved_dir not in existing:
+            self.config.setdefault("preset_dirs", []).append(saved_dir)
+            self.save_config()
+
+        # Register the newly written preset and refresh the dropdown.
+        preset = self._load_preset_file(path)
+        if preset:
+            name = self._register_preset(preset, source_path=path)
+        self._refresh_preset_menu(preset_type)
+        # Select the newly saved preset so the user can see it immediately.
+        if preset_type == "full":
+            self.preset_var.set(name)
+        elif preset_type == "output_template":
+            self.output_template_preset_var.set(name)
+        elif preset_type == "sponsorblock":
+            self.sb_preset_var.set(name)
+        elif preset_type == "extra":
+            self.extra_preset_var.set(name)
+
+    def refresh_presets(self):
+        """Refresh user presets from the configured preset directories."""
+        self.ensure_preset_dirs()
+        self.load_user_presets()
+        self._refresh_preset_menu("full")
+        self._refresh_preset_menu("output_template")
+        self._refresh_preset_menu("sponsorblock")
+        self._refresh_preset_menu("extra")
+        # If the currently selected presets no longer exist, reset to the first one.
+        if self.preset_var.get() not in self.presets:
+            self.preset_var.set(next(iter(self.presets), ""))
+        if self.output_template_preset_var.get() not in self.output_template_presets:
+            self.output_template_preset_var.set(next(iter(self.output_template_presets), "Custom"))
+        if self.sb_preset_var.get() not in self.sb_presets:
+            self.sb_preset_var.set(next(iter(self.sb_presets), "Remove sponsors"))
+        if self.extra_preset_var.get() not in self.extra_presets:
+            self.extra_preset_var.set(next(iter(self.extra_presets), "Custom"))
+
+    def save_current_preset(self):
+        """Save the current full configuration as a user preset."""
+        preset_data = {
+            "format": self.format_var.get(),
+            "resolution": self.resolution_var.get(),
+            "format_custom": self.format_custom_var.get(),
+            "resolution_custom": self.resolution_custom_var.get(),
+            "output_template": self.output_template.get(),
+            "output_dir": self.output_dir_var.get(),
+            "extra": self.extra_text.get("1.0", "end").strip(),
+
+            # playlist
+            "playlist_yes": bool(self.playlist_yes_var.get()),
+            "playlist_items": self.playlist_items_var.get(),
+            "playlist_random": bool(self.playlist_random_var.get()),
+            "playlist_reverse": bool(self.playlist_reverse_var.get()),
+            "skip_errors": self.skip_errors_var.get(),
+
+            # cookies
+            "cookies_file": self.cookies_file_var.get(),
+            "cookies_browser": self.cookies_browser_var.get(),
+
+            # trim
+            "trim_enabled": bool(self.trim_enabled_var.get()),
+            "trim_start_mode": self.trim_start_mode_var.get(),
+            "trim_start": self.trim_start_var.get(),
+            "trim_end_mode": self.trim_end_mode_var.get(),
+            "trim_end": self.trim_end_var.get(),
+        }
+        sb = {
+            "mark": self.sb_mark_var.get(),
+            "remove": self.sb_remove_var.get(),
+            "title": self.sb_title_template.get(),
+            "api": self.sb_api_var.get(),
+            "enabled": bool(self.sb_enabled_var.get()),
+        }
+        # Always include SB section so it can be applied/deselected.
+        preset_data["sb"] = sb
+        self.save_preset_to_file("full", preset_data, name=self.preset_var.get())
+
+    def save_output_template_preset(self):
+        tmpl = self.output_template.get().strip()
+        if not tmpl:
+            messagebox.showwarning("Save output template preset", "Output template is empty.")
+            return
+        # Use the base filename as the preset name by default
+        self.save_preset_to_file("output_template", tmpl)
+
+    def save_sponsorblock_preset(self):
+        sb = {
+            "mark": self.sb_mark_var.get(),
+            "remove": self.sb_remove_var.get(),
+            "title": self.sb_title_template.get(),
+            "api": self.sb_api_var.get(),
+        }
+        if not any(sb.values()):
+            messagebox.showwarning("Save SponsorBlock preset", "SponsorBlock settings are empty.")
+            return
+        self.save_preset_to_file("sponsorblock", sb)
+
+    def save_extra_preset(self):
+        extra = self.extra_text.get("1.0", "end").strip()
+        if not extra:
+            messagebox.showwarning("Save extra preset", "Extra arguments are empty.")
+            return
+        self.save_preset_to_file("extra", extra)
+
+    def apply_extra_preset(self, _=None):
+        name = self.extra_preset_var.get()
+        value = self.extra_presets.get(name, "")
+        self.extra_text.delete("1.0", "end")
+        self.extra_text.insert("1.0", value)
 
     def _portable_runtime_paths(self) -> tuple[str, str, str]:
         """Return normalized runtime, temp and cache directories for yt-dlp."""
@@ -811,23 +1139,28 @@ class YTDLPGui(tk.Tk):
 
         # preset dropdown sits at the top of common options and allows quick
         # one‑click configuration of other fields
-        self.preset_var = tk.StringVar(value=list(self.PRESETS.keys())[0])
+        self.preset_var = tk.StringVar(value=list(self.presets.keys())[0])
         ttk.Label(options_frame, text="Preset:").grid(row=0, column=0, sticky="w")
-        preset_names = list(self.PRESETS.keys())
-        ttk.OptionMenu(options_frame, self.preset_var, preset_names[0], *preset_names,
-                       command=self.apply_preset).grid(row=0, column=1, sticky="w")
+        preset_names = list(self.presets.keys())
+        self.preset_menu = ttk.OptionMenu(options_frame, self.preset_var, preset_names[0], *preset_names,
+                                          command=self.apply_preset)
+        self.preset_menu.grid(row=0, column=1, sticky="w")
+        ttk.Button(options_frame, text="Save preset...", command=self.save_current_preset).grid(row=0, column=2, sticky="w")
+        ttk.Button(options_frame, text="Refresh presets", command=self.refresh_presets).grid(row=0, column=3, sticky="w")
 
         self.output_template = tk.StringVar()
         self.output_template_preset_var = tk.StringVar(value="Custom")
         ttk.Label(options_frame, text="Output template:").grid(row=1, column=0, sticky="w")
         ttk.Entry(options_frame, textvariable=self.output_template, width=30).grid(row=1, column=1, sticky="w")
-        ttk.OptionMenu(
+        self.output_template_menu = ttk.OptionMenu(
             options_frame,
             self.output_template_preset_var,
             "Custom",
-            *list(self.OUTPUT_TEMPLATE_PRESETS.keys()),
+            *list(self.output_template_presets.keys()),
             command=self.apply_output_template_preset,
-        ).grid(row=1, column=2, sticky="w")
+        )
+        self.output_template_menu.grid(row=1, column=2, sticky="w")
+        ttk.Button(options_frame, text="Save output template preset...", command=self.save_output_template_preset).grid(row=1, column=3, sticky="w")
 
         self.output_dir_var = tk.StringVar()
         ttk.Label(options_frame, text="Output folder:").grid(row=2, column=0, sticky="w")
@@ -954,9 +1287,11 @@ class YTDLPGui(tk.Tk):
         default_preset = "Remove sponsors"
         self.sb_preset_var = tk.StringVar(value=default_preset)
         ttk.Label(sb_frame, text="SB preset:").grid(row=0, column=0, sticky="w", padx=5)
-        sb_preset_names = list(self.SB_PRESETS.keys())
-        ttk.OptionMenu(sb_frame, self.sb_preset_var, default_preset, *sb_preset_names,
-                       command=self.apply_sb_preset).grid(row=0, column=1, sticky="w", padx=5)
+        sb_preset_names = list(self.sb_presets.keys())
+        self.sb_preset_menu = ttk.OptionMenu(sb_frame, self.sb_preset_var, default_preset, *sb_preset_names,
+                                             command=self.apply_sb_preset)
+        self.sb_preset_menu.grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Button(sb_frame, text="Save SponsorBlock preset...", command=self.save_sponsorblock_preset).grid(row=0, column=2, sticky="w", padx=5)
 
         lbl_mark = ttk.Label(sb_frame, text="Mark categories:")
         lbl_mark.grid(row=1, column=0, sticky="w", padx=5)
@@ -996,6 +1331,22 @@ class YTDLPGui(tk.Tk):
         # keep reference for tests/layout checks
         self.extra_frame = extra_frame
         extra_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Extras preset controls (specialized presets only for the extra field)
+        extras_preset_frame = ttk.Frame(extra_frame)
+        extras_preset_frame.pack(fill="x", padx=5, pady=(5, 0))
+        ttk.Label(extras_preset_frame, text="Extra preset:").pack(side="left")
+        self.extra_preset_var = tk.StringVar(value="Custom")
+        self.extra_preset_menu = ttk.OptionMenu(
+            extras_preset_frame,
+            self.extra_preset_var,
+            "Custom",
+            *list(getattr(self, 'extra_presets', {'Custom': ''}).keys()),
+            command=self.apply_extra_preset,
+        )
+        self.extra_preset_menu.pack(side="left", padx=(5, 0))
+        ttk.Button(extras_preset_frame, text="Save extra preset...", command=self.save_extra_preset).pack(side="left", padx=5)
+
         self.extra_text = tk.Text(extra_frame, height=5)
         self.extra_text.pack(fill="both", expand=True)
 
@@ -1054,7 +1405,7 @@ class YTDLPGui(tk.Tk):
             self.cookies_browser_var.set(cb)
         # preserve last-used preset if available
         preset = opts.get("preset")
-        if preset in self.PRESETS:
+        if preset in self.presets:
             self.preset_var.set(preset)
             # adjust other fields to match
             self.apply_preset()
@@ -1157,7 +1508,7 @@ class YTDLPGui(tk.Tk):
         properties are handled for now; additional fields can be added easily.
         """
         p = self.preset_var.get()
-        settings = self.PRESETS.get(p, {})
+        settings = self.presets.get(p, {})
         fmt = settings.get("format")
         if fmt is not None:
             self.format_var.set(fmt)
@@ -1168,13 +1519,66 @@ class YTDLPGui(tk.Tk):
             self.resolution_var.set(res)
             # clear any custom text since the preset overrides it
             self.resolution_custom_var.set("")
-        # we do not alter output_template or other user text; presets focus on
-        # core format/resolution choices for the moment.
+        # optionally apply other preset fields beyond format/resolution
+        # (allows user-defined presets to include additional settings).
+        # Apply general fields from the preset, if present.
+        if "output_template" in settings:
+            self.output_template.set(settings.get("output_template", ""))
+            self.output_template_preset_var.set("Custom")
+
+        if "output_dir" in settings:
+            self.output_dir_var.set(settings.get("output_dir", ""))
+
+        if "extra" in settings:
+            self.extra_text.delete("1.0", "end")
+            self.extra_text.insert("1.0", settings.get("extra", ""))
+
+        # Playlist settings
+        if "playlist_yes" in settings:
+            self.playlist_yes_var.set(bool(settings.get("playlist_yes")))
+        if "playlist_items" in settings:
+            self.playlist_items_var.set(settings.get("playlist_items", ""))
+        if "playlist_random" in settings:
+            self.playlist_random_var.set(bool(settings.get("playlist_random")))
+        if "playlist_reverse" in settings:
+            self.playlist_reverse_var.set(bool(settings.get("playlist_reverse")))
+        if "skip_errors" in settings:
+            self.skip_errors_var.set(settings.get("skip_errors", ""))
+
+        # Cookies
+        if "cookies_file" in settings:
+            self.cookies_file_var.set(settings.get("cookies_file", ""))
+        if "cookies_browser" in settings:
+            self.cookies_browser_var.set(settings.get("cookies_browser", "None"))
+
+        # Trim settings
+        if "trim_enabled" in settings:
+            self.trim_enabled_var.set(bool(settings.get("trim_enabled")))
+        if "trim_start_mode" in settings:
+            self.trim_start_mode_var.set(settings.get("trim_start_mode", "Timestamp"))
+        if "trim_start" in settings:
+            self.trim_start_var.set(settings.get("trim_start", ""))
+        if "trim_end_mode" in settings:
+            self.trim_end_mode_var.set(settings.get("trim_end_mode", "Timestamp"))
+        if "trim_end" in settings:
+            self.trim_end_var.set(settings.get("trim_end", ""))
+
+        # SponsorBlock settings
+        sb_settings = settings.get("sb")
+        if isinstance(sb_settings, dict):
+            self.sb_mark_var.set(sb_settings.get("mark", ""))
+            self.sb_remove_var.set(sb_settings.get("remove", ""))
+            self.sb_title_template.set(sb_settings.get("title", ""))
+            self.sb_api_var.set(sb_settings.get("api", ""))
+            # if the preset explicitly disables SB, leave it off
+            self.sb_enabled_var.set(bool(sb_settings.get("enabled", True)))
+            self.sb_preset_var.set("Custom Template")
+        self._repack_optional_frames()
 
     def apply_output_template_preset(self, _=None):
         """Apply a user-facing output template preset to the output field."""
         name = self.output_template_preset_var.get()
-        template = self.OUTPUT_TEMPLATE_PRESETS.get(name, "")
+        template = self.output_template_presets.get(name, "")
         # always update the entry so the user can still edit it after selecting
         # a preset.
         self.output_template.set(template)
@@ -1189,7 +1593,7 @@ class YTDLPGui(tk.Tk):
         providing a convenient way to fill in the fields.
         """
         name = self.sb_preset_var.get()
-        settings = self.SB_PRESETS.get(name, {})
+        settings = self.sb_presets.get(name, {})
 
         def fmt(val):
             if isinstance(val, (list, tuple)):
@@ -1789,12 +2193,46 @@ class SettingsDialog(tk.Toplevel):
         ttk.Checkbutton(self, text="Ask before overwriting existing files",
                         variable=self.ask_overwrite_var).grid(row=1, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
 
-        # dependency management entry point
-        ttk.Button(self, text="Dependencies", command=self.open_dependencies).grid(row=2, column=0, columnspan=3, sticky="w", padx=5, pady=(10,5))
-        # developer tools are hidden in a separate dialog
-        ttk.Button(self, text="Developer options...", command=self.open_developer_options).grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
-        ttk.Button(self, text="OK", command=self.on_ok).grid(row=4, column=1, pady=5)
+        # preset directories (user-defined preset JSON files)
+        ttk.Label(self, text="Preset directories:").grid(row=2, column=0, sticky="w", padx=5, pady=(10,0))
+        self.preset_dirs_listbox = tk.Listbox(self, height=4, selectmode="single", exportselection=False)
+        self.preset_dirs_listbox.grid(row=3, column=0, columnspan=2, sticky="we", padx=5)
+        ttk.Button(self, text="Add...", command=self.add_preset_dir).grid(row=3, column=2, sticky="w", padx=5)
+        ttk.Button(self, text="Remove", command=self.remove_preset_dir).grid(row=4, column=2, sticky="w", padx=5)
+        self._populate_preset_dirs_listbox()
 
+        # dependency management entry point
+        ttk.Button(self, text="Dependencies", command=self.open_dependencies).grid(row=5, column=0, columnspan=3, sticky="w", padx=5, pady=(10,5))
+        # developer tools are hidden in a separate dialog
+        ttk.Button(self, text="Developer options...", command=self.open_developer_options).grid(row=6, column=0, columnspan=3, sticky="w", padx=5, pady=(0,5))
+        ttk.Button(self, text="OK", command=self.on_ok).grid(row=7, column=1, pady=5)
+
+    def _populate_preset_dirs_listbox(self):
+        self.preset_dirs_listbox.delete(0, "end")
+        for d in self.parent.config.get("preset_dirs", []):
+            self.preset_dirs_listbox.insert("end", d)
+
+    def add_preset_dir(self):
+        path = filedialog.askdirectory(title="Select preset directory")
+        if not path:
+            return
+        dirs = list(self.parent.config.get("preset_dirs", []))
+        if path in dirs:
+            return
+        dirs.append(path)
+        self.parent.config["preset_dirs"] = dirs
+        self._populate_preset_dirs_listbox()
+
+    def remove_preset_dir(self):
+        selection = self.preset_dirs_listbox.curselection()
+        if not selection:
+            return
+        idx = selection[0]
+        dirs = list(self.parent.config.get("preset_dirs", []))
+        if 0 <= idx < len(dirs):
+            dirs.pop(idx)
+        self.parent.config["preset_dirs"] = dirs
+        self._populate_preset_dirs_listbox()
 
     def browse(self):
         path = filedialog.askopenfilename(title="Select yt-dlp executable",
@@ -1816,7 +2254,17 @@ class SettingsDialog(tk.Toplevel):
     def on_ok(self):
         self.parent.config["yt_dlp_path"] = self.path_var.get()
         self.parent.config["ask_overwrite"] = bool(self.ask_overwrite_var.get())
+        # persist preset directories
+        self.parent.config["preset_dirs"] = list(self.preset_dirs_listbox.get(0, "end"))
         self.parent.save_config()
+
+        # refresh presets if the directories changed
+        self.parent.ensure_preset_dirs()
+        self.parent.load_user_presets()
+        self.parent._refresh_preset_menu("full")
+        self.parent._refresh_preset_menu("output_template")
+        self.parent._refresh_preset_menu("sponsorblock")
+
         self.destroy()
 
 

@@ -1,0 +1,19 @@
+{
+  "type": "full",
+  "data": {
+    "format": "mp4",
+    "resolution": "1080",
+    "format_custom": "",
+    "resolution_custom": "",
+    "output_template": "%(playlist_index)s_%(title)s_%(uploader)s_%(playlist)s.%(ext)s",
+    "output_dir": "",
+    "extra": "",
+    "sb": {
+      "mark": "selfpromo,interaction,intro,outro,preview",
+      "remove": "sponsor",
+      "title": "",
+      "api": "",
+      "enabled": true
+    }
+  }
+}
