@@ -109,6 +109,7 @@ class YTDLPGui(tk.Tk):
     SB_CATEGORIES = [
         "sponsor", "selfpromo", "interaction", "intro",
         "outro", "preview", "hook", "filler",
+        "chapter",
     ]
 
     def __init__(self):
@@ -1037,7 +1038,15 @@ class YTDLPGui(tk.Tk):
 
         vars: dict[str, tk.BooleanVar] = {}
         current = target_var.get().split(",") if target_var.get() else []
-        for cat in self.SB_CATEGORIES:
+
+        # The "chapter" category is meaningful for marking only; SponsorBlock does
+        # not support removing chapters. Avoid confusing the user by excluding it
+        # from the "Remove categories" picker.
+        categories = list(self.SB_CATEGORIES)
+        if target_var is self.sb_remove_var:
+            categories = [c for c in categories if c != "chapter"]
+
+        for cat in categories:
             v = tk.BooleanVar(value=cat in current)
             vars[cat] = v
             ttk.Checkbutton(dlg, text=cat, variable=v).pack(anchor="w")
