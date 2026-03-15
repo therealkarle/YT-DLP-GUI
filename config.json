@@ -1,7 +1,7 @@
 {
   "yt_dlp_path": "yt-dlp.exe",
   "ask_overwrite": true,
-  "last_output_dir": "C:/Users/flori/Videos",
+  "last_output_dir": "C:/Users/flori/OneDrive/Videobackup/YTDownloads/VSCode",
   "preset_dirs": [
     "Presets",
     "H:\\AppDevelopment\\YT-DLP GUI\\Presets"
@@ -18,6 +18,7 @@
     "trim_start_mode": "Timestamp",
     "trim_end": "",
     "trim_end_mode": "Timestamp",
-    "sb_preset": "Remove sponsors"
+    "sb_preset": "RemoveSponsorMarkOther (2)",
+    "preset": "PlaylistDownlaodSponsorBlockEnabeled (3)"
   }
 }

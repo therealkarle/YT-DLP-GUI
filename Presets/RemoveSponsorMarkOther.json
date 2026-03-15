@@ -1,7 +1,7 @@
 {
   "type": "sponsorblock",
   "data": {
-    "mark": "selfpromo,interaction,intro,outro,preview",
+    "mark": "selfpromo,interaction,intro,outro,preview,hook,chapter",
     "remove": "sponsor",
     "title": "",
     "api": ""

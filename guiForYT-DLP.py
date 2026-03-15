@@ -216,16 +216,25 @@ class YTDLPGui(tk.Tk):
 
         Relative paths are resolved relative to the script directory. Any
         user-provided environment variables (e.g. %APPDATA%) are expanded.
+
+        Duplicate directories (possibly specified with different relative/absolute
+        paths) are removed to avoid loading the same preset files twice.
         """
         dirs = self.config.get("preset_dirs", []) or []
-        out = []
+        out: list[str] = []
+        seen: set[str] = set()
         for d in dirs:
             if not isinstance(d, str) or not d.strip():
                 continue
             expanded = os.path.expanduser(os.path.expandvars(d))
             if not os.path.isabs(expanded):
                 expanded = os.path.join(self.script_dir(), expanded)
-            out.append(os.path.normpath(expanded))
+            norm = os.path.normpath(expanded)
+            key = os.path.normcase(norm)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(norm)
         return out
 
     def ensure_preset_dirs(self):
@@ -327,12 +336,12 @@ class YTDLPGui(tk.Tk):
         if name in builtin_names:
             name = f"{name} (custom)"
 
-        # Avoid collisions between multiple user presets.
-        orig_name = name
-        i = 2
-        while name in store:
-            name = f"{orig_name} ({i})"
-            i += 1
+        # If a preset with the same name is already registered, do not create
+        # a numbered duplicate entry. We prefer keeping the first loaded preset
+        # and ignore any subsequent files that would cause a collision.
+        if name in store:
+            self.log(f"Skipping duplicate preset: {source_path} (name={name})")
+            return name
 
         store[name] = preset["data"]
         return name

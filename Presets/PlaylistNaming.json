@@ -1,0 +1,4 @@
+{
+  "type": "output_template",
+  "data": "%(playlist_index)s_%(title)s_%(playlist)s_%(uploader)s.%(ext)s"
+}
