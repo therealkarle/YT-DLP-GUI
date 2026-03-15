@@ -1301,8 +1301,9 @@ class YTDLPGui(tk.Tk):
         info_mark.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_mark_var = tk.StringVar()
         sb_mark_entry = ttk.Entry(sb_frame, textvariable=self.sb_mark_var,
-                                  width=30, state="readonly")
+                                  width=30)
         sb_mark_entry.grid(row=1, column=1, sticky="w", padx=5)
+        ToolTip(sb_mark_entry, "Edit categories as comma-separated plain text (e.g. sponsor,selfpromo) or use the picker button")
         ttk.Button(sb_frame, text="…", width=3,
                    command=lambda: self._show_category_dialog(self.sb_mark_var)).grid(row=1, column=3, sticky="w")
 
@@ -1314,8 +1315,9 @@ class YTDLPGui(tk.Tk):
         info_remove.bind("<Button-1>", lambda e: self.show_sb_info())
         self.sb_remove_var = tk.StringVar()
         sb_remove_entry = ttk.Entry(sb_frame, textvariable=self.sb_remove_var,
-                                    width=30, state="readonly")
+                                    width=30)
         sb_remove_entry.grid(row=2, column=1, sticky="w", padx=5)
+        ToolTip(sb_remove_entry, "Edit categories as comma-separated plain text (e.g. sponsor,selfpromo) or use the picker button")
         ttk.Button(sb_frame, text="…", width=3,
                    command=lambda: self._show_category_dialog(self.sb_remove_var)).grid(row=2, column=3, sticky="w")
         ttk.Label(sb_frame, text="Chapter title template:").grid(row=3, column=0, sticky="w", padx=5)
