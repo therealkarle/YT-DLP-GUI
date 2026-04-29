@@ -28,3 +28,7 @@ Output
 yt-dlp-temp
 my-output
 
+
+# Privat presets directory
+Presets/PrivatPresets/
+

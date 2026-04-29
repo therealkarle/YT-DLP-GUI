@@ -257,14 +257,15 @@ class YTDLPGui(tk.Tk):
 
         for preset_dir in self.preset_dirs():
             try:
-                for fn in os.listdir(preset_dir):
-                    if not fn.lower().endswith(".json"):
-                        continue
-                    path = os.path.join(preset_dir, fn)
-                    preset = self._load_preset_file(path)
-                    if not preset:
-                        continue
-                    self._register_preset(preset, source_path=path)
+                for root, _, files in os.walk(preset_dir):
+                    for fn in files:
+                        if not fn.lower().endswith(".json"):
+                            continue
+                        path = os.path.join(root, fn)
+                        preset = self._load_preset_file(path)
+                        if not preset:
+                            continue
+                        self._register_preset(preset, source_path=path)
             except Exception:
                 # Ignore unreadable directories
                 continue
