@@ -7,18 +7,18 @@
     "H:\\AppDevelopment\\YT-DLP GUI\\Presets"
   ],
   "last_options": {
-    "format": "mp4",
+    "format": "best",
     "format_custom": "",
-    "resolution": "1080",
+    "resolution": "best",
     "resolution_custom": "",
-    "extra": "",
+    "extra": "--write-auto-subs --skip-download --sub-format srt",
     "cookies_file": "",
-    "cookies_browser": "firefox",
+    "cookies_browser": "None",
     "trim_start": "",
     "trim_start_mode": "Timestamp",
     "trim_end": "",
     "trim_end_mode": "Timestamp",
-    "sb_preset": "RemoveSponsorMarkOther (2)",
-    "preset": "PlaylistDownlaodSponsorBlockEnabeled (3)"
+    "sb_preset": "Custom Template",
+    "preset": "Transcript only"
   }
 }

@@ -1,0 +1,31 @@
+{
+  "type": "full",
+  "data": {
+    "format": "best",
+    "resolution": "best",
+    "format_custom": "",
+    "resolution_custom": "",
+    "output_template": "%(title)s_Transcript",
+    "output_dir": "",
+    "extra": "--write-auto-subs --skip-download --sub-format srt",
+    "playlist_yes": false,
+    "playlist_items": "",
+    "playlist_random": false,
+    "playlist_reverse": false,
+    "skip_errors": "",
+    "cookies_file": "",
+    "cookies_browser": "None",
+    "trim_enabled": false,
+    "trim_start_mode": "Timestamp",
+    "trim_start": "",
+    "trim_end_mode": "Timestamp",
+    "trim_end": "",
+    "sb": {
+      "mark": "",
+      "remove": "",
+      "title": "",
+      "api": "",
+      "enabled": false
+    }
+  }
+}
