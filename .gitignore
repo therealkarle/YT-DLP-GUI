@@ -32,3 +32,6 @@ my-output
 # Privat presets directory
 Presets/PrivatPresets/
 
+
+config.json
+
