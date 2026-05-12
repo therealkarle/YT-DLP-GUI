@@ -95,6 +95,7 @@ class YTDLPGui(tk.Tk):
         "Date - Title": "%(upload_date)s - %(title)s.%(ext)s",
         "Playlist/Title": "%(playlist)s/%(title)s.%(ext)s",
         "Playlist index - Title": "%(playlist_index)s - %(title)s.%(ext)s",
+        "Chapter: Index_Name_Title": "%(chapter_number)s_%(chapter_title)s_%(title)s.%(ext)s",
     }
 
     SB_PRESETS = {
@@ -503,7 +504,6 @@ class YTDLPGui(tk.Tk):
             "chapters_mode": self.chapters_mode_var.get(),
             "chapters_selection": self.chapters_selection_var.get(),
             "chapters_range": self.chapters_range_var.get(),
-            "chapters_template": self.chapters_template_var.get(),
             "chapters_use_folder": bool(self.chapters_use_folder_var.get()),
         }
         sb = {
@@ -1384,11 +1384,6 @@ class YTDLPGui(tk.Tk):
         ttk.Label(chapters_frame, text="Chapter range (e.g. 1-5,3,7-9):").grid(row=3, column=0, sticky="w", padx=5, pady=2)
         self.chapters_range_var = tk.StringVar()
         ttk.Entry(chapters_frame, textvariable=self.chapters_range_var, width=30).grid(row=3, column=1, sticky="w", padx=5)
-
-        ttk.Label(chapters_frame, text="Output template:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
-        self.chapters_template_var = tk.StringVar(value="%(chapter_number)s - %(chapter_title)s - %(title)s.%(ext)s")
-        ttk.Entry(chapters_frame, textvariable=self.chapters_template_var, width=40).grid(row=4, column=1, sticky="w", padx=5)
-        # hidden until enabled
         
         # Extra args area
         extra_frame = ttk.LabelFrame(self, text="Extra arguments")
@@ -1655,8 +1650,6 @@ class YTDLPGui(tk.Tk):
             self.chapters_selection_var.set(settings.get("chapters_selection", "all"))
         if "chapters_range" in settings:
             self.chapters_range_var.set(settings.get("chapters_range", ""))
-        if "chapters_template" in settings:
-            self.chapters_template_var.set(settings.get("chapters_template", "%(chapter_number)s - %(chapter_title)s - %(title)s.%(ext)s"))
         if "chapters_use_folder" in settings:
             self.chapters_use_folder_var.set(bool(settings.get("chapters_use_folder")))
 
@@ -1849,25 +1842,20 @@ class YTDLPGui(tk.Tk):
             # Add explicit home path override for chapters
             opts += ["-P", f"home:{chapters_work_dir.replace('\\', '/')}"]
             
+            chapter_output_template = self.output_template.get().strip() or "%(title)s.%(ext)s"
+            
             if chapters_mode == "split":
                 # Split video into individual files per chapter
                 opts += ["--split-chapters"]
-                # For split chapters, use relative path to work with -P home
                 if use_folder:
-                    # Create chapters subdirectory with video title (relative to home)
-                    opts += ["-o", "%(title)s_chapters/" + self.chapters_template_var.get().replace('\\', '/')]
+                    opts += ["-o", "%(title)s_chapters/" + chapter_output_template]
                 else:
-                    # Use main output directory directly (relative to home)
-                    opts += ["-o", self.chapters_template_var.get().replace('\\', '/')]
+                    opts += ["-o", chapter_output_template]
                 
             elif chapters_mode == "individual":
                 # Download individual chapters as separate files using sections
                 if use_folder:
-                    # Create chapters subdirectory with video title (relative to output dir)
-                    chapter_template = os.path.join("%(title)s_chapters", self.chapters_template_var.get())
-                else:
-                    # Use the main output directory directly (current working directory)
-                    chapter_template = self.chapters_template_var.get()
+                    chapter_output_template = os.path.join("%(title)s_chapters", chapter_output_template)
                 
                 if chapters_selection == "range":
                     chapters_range = self.chapters_range_var.get().strip()
@@ -1885,7 +1873,7 @@ class YTDLPGui(tk.Tk):
                     opts += ["--download-sections", "*0-0"]
                 
                 # Set output template for chapter files with relative path
-                opts += ["-o", chapter_template.replace('\\', '/')]
+                opts += ["-o", chapter_output_template.replace('\\', '/')]
 
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.
