@@ -12,6 +12,7 @@ import zipfile
 import shutil
 import shlex
 import tempfile
+import re
 
 
 FFMPEG_RELEASE_API_URLS = [
@@ -81,6 +82,7 @@ class YTDLPGui(tk.Tk):
         "Default": {},
         "Audio only": {"format": "mp3", "resolution": "best"},
         "Video 1080p": {"format": "mp4", "resolution": "1080"},
+        "Download chapters": {"format": "mp4", "resolution": "best", "chapters": True},
     }
 
     # Presets for the output template (yt-dlp -o / --output).  The default
@@ -495,6 +497,14 @@ class YTDLPGui(tk.Tk):
             "trim_start": self.trim_start_var.get(),
             "trim_end_mode": self.trim_end_mode_var.get(),
             "trim_end": self.trim_end_var.get(),
+
+            # chapters
+            "chapters": bool(self.chapters_enabled_var.get()),
+            "chapters_mode": self.chapters_mode_var.get(),
+            "chapters_selection": self.chapters_selection_var.get(),
+            "chapters_range": self.chapters_range_var.get(),
+            "chapters_template": self.chapters_template_var.get(),
+            "chapters_use_folder": bool(self.chapters_use_folder_var.get()),
         }
         sb = {
             "mark": self.sb_mark_var.get(),
@@ -1346,6 +1356,39 @@ class YTDLPGui(tk.Tk):
         self.sb_api_var = tk.StringVar()
         ttk.Entry(sb_frame, textvariable=self.sb_api_var, width=40).grid(row=4, column=1, sticky="w", padx=5)
         # hidden until enabled
+
+        # Chapter download checkbox and fields
+        self.chapters_enabled_var = tk.BooleanVar(value=False)
+        self.chapters_checkbox = ttk.Checkbutton(self, text="Enable Chapter Download",
+                                               variable=self.chapters_enabled_var,
+                                               command=self.toggle_chapters_frame)
+        self.chapters_checkbox.pack(fill="x", padx=5, pady=2)
+
+        chapters_frame = ttk.LabelFrame(self, text="Chapter Download")
+        self.chapters_frame = chapters_frame
+
+        ttk.Label(chapters_frame, text="Chapter mode:").grid(row=0, column=0, sticky="w", padx=5, pady=2)
+        self.chapters_mode_var = tk.StringVar(value="split")
+        ttk.OptionMenu(chapters_frame, self.chapters_mode_var, "split", 
+                       "individual", "split").grid(row=0, column=1, sticky="w", padx=5)
+
+        ttk.Label(chapters_frame, text="Chapter selection:").grid(row=1, column=0, sticky="w", padx=5, pady=2)
+        self.chapters_selection_var = tk.StringVar(value="all")
+        ttk.OptionMenu(chapters_frame, self.chapters_selection_var, "all",
+                       "all", "range", "custom").grid(row=1, column=1, sticky="w", padx=5)
+
+        self.chapters_use_folder_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(chapters_frame, text="Create subfolder with video title", 
+                        variable=self.chapters_use_folder_var).grid(row=2, column=0, columnspan=2, sticky="w", padx=5, pady=2)
+
+        ttk.Label(chapters_frame, text="Chapter range (e.g. 1-5,3,7-9):").grid(row=3, column=0, sticky="w", padx=5, pady=2)
+        self.chapters_range_var = tk.StringVar()
+        ttk.Entry(chapters_frame, textvariable=self.chapters_range_var, width=30).grid(row=3, column=1, sticky="w", padx=5)
+
+        ttk.Label(chapters_frame, text="Output template:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        self.chapters_template_var = tk.StringVar(value="%(chapter_number)s - %(chapter_title)s - %(title)s.%(ext)s")
+        ttk.Entry(chapters_frame, textvariable=self.chapters_template_var, width=40).grid(row=4, column=1, sticky="w", padx=5)
+        # hidden until enabled
         
         # Extra args area
         extra_frame = ttk.LabelFrame(self, text="Extra arguments")
@@ -1487,22 +1530,30 @@ class YTDLPGui(tk.Tk):
 
         self._repack_optional_frames()
 
+    def toggle_chapters_frame(self):
+        """Show or hide the Chapter Download options frame based on the checkbox."""
+        self._repack_optional_frames()
+
     def _repack_optional_frames(self):
-        """Ensure Trim and SponsorBlock frames are packed in the desired order.
+        """Ensure Trim, SponsorBlock, and Chapters frames are packed in the desired order.
 
         The order should always be:
             Trim (if enabled)
             SponsorBlock (if enabled)
+            Chapters (if enabled)
             Extra arguments
         """
         self.trim_frame.pack_forget()
         self.sb_frame.pack_forget()
+        self.chapters_frame.pack_forget()
 
         if self.trim_enabled_var.get():
             # Ensure trim section is directly under the trim checkbox.
             self.trim_frame.pack(fill="x", padx=5, pady=5, before=self.sb_checkbox)
         if self.sb_enabled_var.get():
-            self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
+            self.sb_frame.pack(fill="x", padx=5, pady=5, before=self.chapters_checkbox)
+        if self.chapters_enabled_var.get():
+            self.chapters_frame.pack(fill="x", padx=5, pady=5, before=self.extra_frame)
 
     def _normalize_trim_value(self, mode: str, value: str, is_end: bool) -> str | None:
         """Normalize a trim value based on mode.
@@ -1594,6 +1645,21 @@ class YTDLPGui(tk.Tk):
             # if the preset explicitly disables SB, leave it off
             self.sb_enabled_var.set(bool(sb_settings.get("enabled", True)))
             self.sb_preset_var.set("Custom Template")
+
+        # Chapters settings
+        if "chapters" in settings:
+            self.chapters_enabled_var.set(bool(settings.get("chapters")))
+        if "chapters_mode" in settings:
+            self.chapters_mode_var.set(settings.get("chapters_mode", "individual"))
+        if "chapters_selection" in settings:
+            self.chapters_selection_var.set(settings.get("chapters_selection", "all"))
+        if "chapters_range" in settings:
+            self.chapters_range_var.set(settings.get("chapters_range", ""))
+        if "chapters_template" in settings:
+            self.chapters_template_var.set(settings.get("chapters_template", "%(chapter_number)s - %(chapter_title)s - %(title)s.%(ext)s"))
+        if "chapters_use_folder" in settings:
+            self.chapters_use_folder_var.set(bool(settings.get("chapters_use_folder")))
+
         self._repack_optional_frames()
 
     def apply_output_template_preset(self, _=None):
@@ -1763,6 +1829,64 @@ class YTDLPGui(tk.Tk):
                 else:
                     section = f"*0-{end}"
                 opts += ["--download-sections", section]
+
+        # chapters flags - only apply when the feature is enabled
+        if self.chapters_enabled_var.get():
+            chapters_mode = self.chapters_mode_var.get()
+            chapters_selection = self.chapters_selection_var.get()
+            use_folder = self.chapters_use_folder_var.get()
+            
+            # Determine output directory based on checkbox
+            if use_folder:
+                # Create chapters subdirectory with video title
+                # Get video title from URL or use default
+                video_title = "Video"  # Default fallback
+                url = self.url_var.get().strip() if hasattr(self, 'url_var') else ""
+                if url:
+                    # Extract video title from URL as fallback
+                    # This will be replaced by yt-dlp's %(title)s, but we need it for folder name
+                    match = re.search(r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]+)', url)
+                    if match:
+                        video_title = match.group(1)
+                
+                # Create chapters folder path
+                chapters_subdir = os.path.join(output_subdir, f"{video_title}_chapters")
+                try:
+                    os.makedirs(chapters_subdir, exist_ok=True)
+                except Exception:
+                    pass
+            else:
+                # Use the main output directory directly
+                chapters_subdir = output_subdir
+            
+            if chapters_mode == "split":
+                # Split video into individual files per chapter
+                opts += ["--split-chapters"]
+                # Set output path based on folder choice
+                chapter_template = os.path.join(chapters_subdir, "%(chapter_number)s - %(chapter_title)s.%(ext)s")
+                opts += ["--output", chapter_template]
+            elif chapters_mode == "individual":
+                # Download individual chapters as separate files
+                opts += ["--download-sections", "*0-0"]  # This will be overridden by chapter selection
+                # Set output path based on folder choice
+                chapter_template = os.path.join(chapters_subdir, "%(chapter_number)s - %(chapter_title)s.%(ext)s")
+                opts += ["--output", chapter_template]
+                
+            # Apply chapter selection
+            if chapters_selection == "range":
+                chapters_range = self.chapters_range_var.get().strip()
+                if chapters_range:
+                    # Convert chapter range to section format
+                    # yt-dlp supports chapter ranges like "1-5,3,7-9"
+                    opts += ["--playlist-items", chapters_range]
+            elif chapters_selection == "custom":
+                # For custom selection, we'll use the chapters range field
+                chapters_range = self.chapters_range_var.get().strip()
+                if chapters_range:
+                    opts += ["--playlist-items", chapters_range]
+            
+            # Don't override output template if already set for chapters
+            # The template is already set above for split/individual modes
 
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.

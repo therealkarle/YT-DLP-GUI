@@ -11,14 +11,13 @@
     "format_custom": "",
     "resolution": "best",
     "resolution_custom": "",
-    "extra": "--write-auto-subs --skip-download --sub-format srt",
+    "extra": "",
     "cookies_file": "",
     "cookies_browser": "None",
     "trim_start": "",
     "trim_start_mode": "Timestamp",
     "trim_end": "",
     "trim_end_mode": "Timestamp",
-    "sb_preset": "Custom Template",
-    "preset": "IFFChanelTranskriptDownload"
+    "sb_preset": "Custom Template"
   }
 }
