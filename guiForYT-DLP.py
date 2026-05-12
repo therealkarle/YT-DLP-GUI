@@ -1744,7 +1744,10 @@ class YTDLPGui(tk.Tk):
         if out_prefix and not template_rel.startswith(f"{out_prefix}/"):
             template_rel = f"{out_prefix}/{template_rel}"
 
-        opts += ["-o", template_rel]
+        # Only set normal output template if chapters are not enabled
+        # (chapters will set their own output template)
+        if not self.chapters_enabled_var.get():
+            opts += ["-o", template_rel]
 
         # remember selection for next run only when the user explicitly chose it
         if raw_selected_output:
@@ -1836,57 +1839,53 @@ class YTDLPGui(tk.Tk):
             chapters_selection = self.chapters_selection_var.get()
             use_folder = self.chapters_use_folder_var.get()
             
-            # Determine output directory based on checkbox
-            if use_folder:
-                # Create chapters subdirectory with video title
-                # Get video title from URL or use default
-                video_title = "Video"  # Default fallback
-                url = self.url_var.get().strip() if hasattr(self, 'url_var') else ""
-                if url:
-                    # Extract video title from URL as fallback
-                    # This will be replaced by yt-dlp's %(title)s, but we need it for folder name
-                    match = re.search(r'(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]+)', url)
-                    if match:
-                        video_title = match.group(1)
-                
-                # Create chapters folder path
-                chapters_subdir = os.path.join(output_subdir, f"{video_title}_chapters")
-                try:
-                    os.makedirs(chapters_subdir, exist_ok=True)
-                except Exception:
-                    pass
+            # For chapters, we need to determine the output directory
+            # and force the home path to output directory
+            if os.path.isabs(output_subdir):
+                chapters_work_dir = output_subdir
             else:
-                # Use the main output directory directly
-                chapters_subdir = output_subdir
+                chapters_work_dir = os.path.join(runtime_dir, output_subdir)
+            
+            # Add explicit home path override for chapters
+            opts += ["-P", f"home:{chapters_work_dir.replace('\\', '/')}"]
             
             if chapters_mode == "split":
                 # Split video into individual files per chapter
                 opts += ["--split-chapters"]
-                # Set output path based on folder choice
-                chapter_template = os.path.join(chapters_subdir, "%(chapter_number)s - %(chapter_title)s.%(ext)s")
-                opts += ["--output", chapter_template]
-            elif chapters_mode == "individual":
-                # Download individual chapters as separate files
-                opts += ["--download-sections", "*0-0"]  # This will be overridden by chapter selection
-                # Set output path based on folder choice
-                chapter_template = os.path.join(chapters_subdir, "%(chapter_number)s - %(chapter_title)s.%(ext)s")
-                opts += ["--output", chapter_template]
+                # For split chapters, use relative path to work with -P home
+                if use_folder:
+                    # Create chapters subdirectory with video title (relative to home)
+                    opts += ["-o", "%(title)s_chapters/" + self.chapters_template_var.get().replace('\\', '/')]
+                else:
+                    # Use main output directory directly (relative to home)
+                    opts += ["-o", self.chapters_template_var.get().replace('\\', '/')]
                 
-            # Apply chapter selection
-            if chapters_selection == "range":
-                chapters_range = self.chapters_range_var.get().strip()
-                if chapters_range:
-                    # Convert chapter range to section format
-                    # yt-dlp supports chapter ranges like "1-5,3,7-9"
-                    opts += ["--playlist-items", chapters_range]
-            elif chapters_selection == "custom":
-                # For custom selection, we'll use the chapters range field
-                chapters_range = self.chapters_range_var.get().strip()
-                if chapters_range:
-                    opts += ["--playlist-items", chapters_range]
-            
-            # Don't override output template if already set for chapters
-            # The template is already set above for split/individual modes
+            elif chapters_mode == "individual":
+                # Download individual chapters as separate files using sections
+                if use_folder:
+                    # Create chapters subdirectory with video title (relative to output dir)
+                    chapter_template = os.path.join("%(title)s_chapters", self.chapters_template_var.get())
+                else:
+                    # Use the main output directory directly (current working directory)
+                    chapter_template = self.chapters_template_var.get()
+                
+                if chapters_selection == "range":
+                    chapters_range = self.chapters_range_var.get().strip()
+                    if chapters_range:
+                        # Convert chapter range to section format
+                        # yt-dlp supports chapter ranges like "1-5,3,7-9"
+                        opts += ["--download-sections", chapters_range]
+                elif chapters_selection == "custom":
+                    # For custom selection, use the chapters range field
+                    chapters_range = self.chapters_range_var.get().strip()
+                    if chapters_range:
+                        opts += ["--download-sections", chapters_range]
+                else:
+                    # Download all chapters as individual sections
+                    opts += ["--download-sections", "*0-0"]
+                
+                # Set output template for chapter files with relative path
+                opts += ["-o", chapter_template.replace('\\', '/')]
 
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.
@@ -1926,12 +1925,29 @@ class YTDLPGui(tk.Tk):
 
     def run_subprocess(self, cmd):
         try:
+            # Determine working directory: use output folder if chapters are enabled
+            if self.chapters_enabled_var.get():
+                # Get the output directory for chapters
+                runtime_dir, _temp_dir, _cache_dir = self._portable_runtime_paths()
+                raw_selected_output = self.output_dir_var.get().strip()
+                if raw_selected_output:
+                    output_subdir = self._to_portable_subdir(raw_selected_output, runtime_dir)
+                else:
+                    output_subdir = self._to_portable_subdir("", runtime_dir)
+                
+                if os.path.isabs(output_subdir):
+                    work_dir = output_subdir
+                else:
+                    work_dir = os.path.join(runtime_dir, output_subdir)
+            else:
+                work_dir = self.yt_dlp_runtime_dir()
+            
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
-                cwd=self.yt_dlp_runtime_dir(),
+                cwd=work_dir,
             )
             self.current_proc = proc
             # stdout is guaranteed when we pass PIPE, but the type stubs mark it
@@ -1940,6 +1956,59 @@ class YTDLPGui(tk.Tk):
             for line in proc.stdout:
                 self.log(line.rstrip())
             proc.wait()
+            
+            # Cleanup and organize chapters after split
+            if proc.returncode == 0 and self.chapters_enabled_var.get():
+                chapters_mode = self.chapters_mode_var.get()
+                use_folder = self.chapters_use_folder_var.get()
+                
+                if chapters_mode == "split":
+                    try:
+                        # Find the merged file in _chapters subfolder
+                        merged_subfolder = None
+                        for item in os.listdir(work_dir):
+                            item_path = os.path.join(work_dir, item)
+                            if os.path.isdir(item_path) and item.endswith("_chapters"):
+                                merged_subfolder = item_path
+                                # Delete merged file from _chapters subfolder
+                                for file in os.listdir(item_path):
+                                    if file.startswith("NA - NA"):
+                                        file_path = os.path.join(item_path, file)
+                                        try:
+                                            os.remove(file_path)
+                                            self.log(f"Deleted merged file: {file}")
+                                        except Exception as e:
+                                            self.log(f"Could not delete {file}: {e}")
+                        
+                        # If use_folder is True, move chapter files into the _chapters subfolder
+                        if use_folder and merged_subfolder:
+                            # Get video title from merged subfolder name
+                            video_title = os.path.basename(merged_subfolder).replace("_chapters", "")
+                            
+                            # Move all chapter files into the subfolder
+                            for file in os.listdir(work_dir):
+                                file_path = os.path.join(work_dir, file)
+                                if os.path.isfile(file_path) and not file.startswith("NA - NA"):
+                                    # Check if it's a chapter file (has chapter number pattern)
+                                    if video_title in file or any(c.isdigit() for c in file[:3]):
+                                        try:
+                                            dest_path = os.path.join(merged_subfolder, file)
+                                            shutil.move(file_path, dest_path)
+                                            self.log(f"Moved to subfolder: {file}")
+                                        except Exception as e:
+                                            self.log(f"Could not move {file}: {e}")
+                        
+                        # If use_folder is False, remove the empty _chapters subfolder
+                        elif not use_folder and merged_subfolder:
+                            try:
+                                os.rmdir(merged_subfolder)
+                                self.log(f"Deleted empty subfolder: {os.path.basename(merged_subfolder)}")
+                            except Exception as e:
+                                self.log(f"Could not delete subfolder: {e}")
+                                
+                    except Exception as e:
+                        self.log(f"Error during chapters organization: {e}")
+            
             self.log(f"Process exited with {proc.returncode}")
         except Exception as e:
             self.log(f"Error running command: {e}")
