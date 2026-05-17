@@ -71,6 +71,7 @@ DEFAULT_CONFIG = {
         # ``collect_options``.  cookies fields added for authentication.
         "cookies_file": "",
         "cookies_browser": "None",
+            "youtube_po_token": "",
     }
 }
 
@@ -1256,6 +1257,12 @@ class YTDLPGui(tk.Tk):
         browsers = ["None", "chrome", "firefox", "edge", "safari"]
         ttk.OptionMenu(options_frame, self.cookies_browser_var, browsers[0], *browsers).grid(row=6, column=1, sticky="w")
 
+        self.youtube_po_token_var = tk.StringVar()
+        lbl_po = ttk.Label(options_frame, text="YouTube PO token:")
+        lbl_po.grid(row=7, column=0, sticky="w")
+        ToolTip(lbl_po, "Optional. Paste mweb.gvs+TOKEN or a full youtube:po_token=... extractor arg.")
+        ttk.Entry(options_frame, textvariable=self.youtube_po_token_var, width=40).grid(row=7, column=1, sticky="w")
+
         # ---------- playlist options ----------
         playlist_frame = ttk.LabelFrame(self, text="Playlist options")
         playlist_frame.pack(fill="x", padx=5, pady=5)
@@ -1462,6 +1469,7 @@ class YTDLPGui(tk.Tk):
         cb = opts.get("cookies_browser", "None")
         if cb:
             self.cookies_browser_var.set(cb)
+        self.youtube_po_token_var.set(opts.get("youtube_po_token", ""))
         # preserve last-used preset if available
         preset = opts.get("preset")
         if preset in self.presets:
@@ -1617,6 +1625,8 @@ class YTDLPGui(tk.Tk):
             self.cookies_file_var.set(settings.get("cookies_file", ""))
         if "cookies_browser" in settings:
             self.cookies_browser_var.set(settings.get("cookies_browser", "None"))
+        if "youtube_po_token" in settings:
+            self.youtube_po_token_var.set(settings.get("youtube_po_token", ""))
 
         # Trim settings
         if "trim_enabled" in settings:
@@ -1754,6 +1764,11 @@ class YTDLPGui(tk.Tk):
             fmt_custom = self.format_custom_var.get().strip()
             if fmt_custom:
                 opts += ["-f", fmt_custom]
+        elif fmt == "best":
+            # Prefer adaptive video+audio with a plain fallback instead of
+            # relying on site-specific "best" aliases that may pick fragile
+            # HLS-only variants and trigger 403 fragment errors.
+            opts += ["-f", "bv*+ba/b"]
         else:
             # container-style selection for common video formats
             if fmt in ("mp4", "mkv", "webm"):
@@ -1789,6 +1804,16 @@ class YTDLPGui(tk.Tk):
             opts += ["--cookies", self.cookies_file_var.get()]
         elif self.cookies_browser_var.get() and self.cookies_browser_var.get() != "None":
             opts += ["--cookies-from-browser", self.cookies_browser_var.get()]
+
+        youtube_po_token = self.youtube_po_token_var.get().strip()
+        if youtube_po_token:
+            if youtube_po_token.startswith("youtube:"):
+                extractor_arg = youtube_po_token
+            elif youtube_po_token.startswith("po_token="):
+                extractor_arg = f"youtube:{youtube_po_token}"
+            else:
+                extractor_arg = f"youtube:po_token={youtube_po_token}"
+            opts += ["--extractor-args", extractor_arg]
 
         # playlist flags
         if self.playlist_yes_var.get():
@@ -1885,6 +1910,7 @@ class YTDLPGui(tk.Tk):
             "extra": extra,
             "cookies_file": self.cookies_file_var.get(),
             "cookies_browser": self.cookies_browser_var.get(),
+            "youtube_po_token": self.youtube_po_token_var.get(),
             "trim_start": self.trim_start_var.get(),
             "trim_start_mode": self.trim_start_mode_var.get(),
             "trim_end": self.trim_end_var.get(),
