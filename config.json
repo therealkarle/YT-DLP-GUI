@@ -1,7 +1,7 @@
 {
   "yt_dlp_path": "yt-dlp.exe",
   "ask_overwrite": true,
-  "last_output_dir": "C:/Users/flori/OneDrive/Videobackup/YTDownloads/VSCode",
+  "last_output_dir": "Output",
   "preset_dirs": [
     "Presets",
     "H:\\AppDevelopment\\YT-DLP GUI\\Presets"

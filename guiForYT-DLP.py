@@ -96,7 +96,12 @@ class YTDLPGui(tk.Tk):
         "Date - Title": "%(upload_date)s - %(title)s.%(ext)s",
         "Playlist/Title": "%(playlist)s/%(title)s.%(ext)s",
         "Playlist index - Title": "%(playlist_index)s - %(title)s.%(ext)s",
+    }
+
+    CHAPTER_OUTPUT_TEMPLATE_PRESETS = {
         "Chapter: Index_Name_Title": "%(chapter_number)s_%(chapter_title)s_%(title)s.%(ext)s",
+        "Title": "%(title)s.%(ext)s",
+        "Uploader - Title": "%(uploader)s - %(title)s.%(ext)s",
     }
 
     SB_PRESETS = {
@@ -256,6 +261,7 @@ class YTDLPGui(tk.Tk):
         # Start with built-in presets then merge user presets.
         self.presets = dict(self.PRESETS)
         self.output_template_presets = dict(self.OUTPUT_TEMPLATE_PRESETS)
+        self.chapter_output_template_presets = dict(self.CHAPTER_OUTPUT_TEMPLATE_PRESETS)
         self.sb_presets = dict(self.SB_PRESETS)
         self.extra_presets = {"Custom": ""}
 
@@ -302,7 +308,7 @@ class YTDLPGui(tk.Tk):
             return None
 
         preset_type = obj.get("type")
-        if preset_type not in ("full", "output_template", "sponsorblock", "extra"):
+        if preset_type not in ("full", "output_template", "chapter_output_template", "sponsorblock", "extra"):
             # Try to infer type from the content.
             data_guess = obj.get("data", obj)
             if isinstance(data_guess, str):
@@ -335,6 +341,7 @@ class YTDLPGui(tk.Tk):
         builtin_names = {
             "full": set(self.PRESETS.keys()),
             "output_template": set(self.OUTPUT_TEMPLATE_PRESETS.keys()),
+            "chapter_output_template": set(self.CHAPTER_OUTPUT_TEMPLATE_PRESETS.keys()),
             "sponsorblock": set(self.SB_PRESETS.keys()),
         }.get(preset["type"], set())
 
@@ -356,6 +363,8 @@ class YTDLPGui(tk.Tk):
             return self.presets
         if preset_type == "output_template":
             return self.output_template_presets
+        if preset_type == "chapter_output_template":
+            return self.chapter_output_template_presets
         if preset_type == "sponsorblock":
             return self.sb_presets
         if preset_type == "extra":
@@ -367,6 +376,8 @@ class YTDLPGui(tk.Tk):
             return getattr(self, "preset_menu", None)
         if preset_type == "output_template":
             return getattr(self, "output_template_menu", None)
+        if preset_type == "chapter_output_template":
+            return getattr(self, "chapter_output_template_menu", None)
         if preset_type == "sponsorblock":
             return getattr(self, "sb_preset_menu", None)
         if preset_type == "extra":
@@ -394,6 +405,9 @@ class YTDLPGui(tk.Tk):
         elif preset_type == "output_template":
             self.output_template_preset_var.set(name)
             self.apply_output_template_preset()
+        elif preset_type == "chapter_output_template":
+            self.chapter_output_template_preset_var.set(name)
+            self.apply_chapter_output_template_preset()
         elif preset_type == "sponsorblock":
             self.sb_preset_var.set(name)
             self.apply_sb_preset()
@@ -404,6 +418,7 @@ class YTDLPGui(tk.Tk):
         prompt = {
             "full": "Save preset",  # in case we later add a full preset saver
             "output_template": "Save output template preset",
+            "chapter_output_template": "Save chapter output template preset",
             "sponsorblock": "Save SponsorBlock preset",
         }.get(preset_type, "Save preset")
         path = filedialog.asksaveasfilename(
@@ -448,6 +463,8 @@ class YTDLPGui(tk.Tk):
             self.preset_var.set(name)
         elif preset_type == "output_template":
             self.output_template_preset_var.set(name)
+        elif preset_type == "chapter_output_template":
+            self.chapter_output_template_preset_var.set(name)
         elif preset_type == "sponsorblock":
             self.sb_preset_var.set(name)
         elif preset_type == "extra":
@@ -459,6 +476,7 @@ class YTDLPGui(tk.Tk):
         self.load_user_presets()
         self._refresh_preset_menu("full")
         self._refresh_preset_menu("output_template")
+        self._refresh_preset_menu("chapter_output_template")
         self._refresh_preset_menu("sponsorblock")
         self._refresh_preset_menu("extra")
         # If the currently selected presets no longer exist, reset to the first one.
@@ -466,6 +484,8 @@ class YTDLPGui(tk.Tk):
             self.preset_var.set(next(iter(self.presets), ""))
         if self.output_template_preset_var.get() not in self.output_template_presets:
             self.output_template_preset_var.set(next(iter(self.output_template_presets), "Custom"))
+        if self.chapter_output_template_preset_var.get() not in self.chapter_output_template_presets:
+            self.chapter_output_template_preset_var.set(next(iter(self.chapter_output_template_presets), "Custom"))
         if self.sb_preset_var.get() not in self.sb_presets:
             self.sb_preset_var.set(next(iter(self.sb_presets), "Remove sponsors"))
         if self.extra_preset_var.get() not in self.extra_presets:
@@ -479,6 +499,7 @@ class YTDLPGui(tk.Tk):
             "format_custom": self.format_custom_var.get(),
             "resolution_custom": self.resolution_custom_var.get(),
             "output_template": self.output_template.get(),
+            "chapter_output_template": self.chapter_output_template.get(),
             "output_dir": self.output_dir_var.get(),
             "extra": self.extra_text.get("1.0", "end").strip(),
 
@@ -525,6 +546,19 @@ class YTDLPGui(tk.Tk):
             return
         # Use the base filename as the preset name by default
         self.save_preset_to_file("output_template", tmpl)
+
+    def save_chapter_output_template_preset(self):
+        tmpl = self.chapter_output_template.get().strip()
+        if not tmpl:
+            messagebox.showwarning("Save chapter output template preset", "Chapter output template is empty.")
+            return
+        self.save_preset_to_file("chapter_output_template", tmpl)
+
+    def apply_chapter_output_template_preset(self, _=None):
+        """Apply a chapter output template preset to the chapter output field."""
+        name = self.chapter_output_template_preset_var.get()
+        template = self.chapter_output_template_presets.get(name, "")
+        self.chapter_output_template.set(template)
 
     def save_sponsorblock_preset(self):
         sb = {
@@ -1391,6 +1425,22 @@ class YTDLPGui(tk.Tk):
         ttk.Label(chapters_frame, text="Chapter range (e.g. 1-5,3,7-9):").grid(row=3, column=0, sticky="w", padx=5, pady=2)
         self.chapters_range_var = tk.StringVar()
         ttk.Entry(chapters_frame, textvariable=self.chapters_range_var, width=30).grid(row=3, column=1, sticky="w", padx=5)
+
+        # Chapter output template with its own preset dropdown
+        self.chapter_output_template = tk.StringVar(value="%(chapter_number)s_%(chapter_title)s_%(title)s.%(ext)s")
+        self.chapter_output_template_preset_var = tk.StringVar(value=list(self.CHAPTER_OUTPUT_TEMPLATE_PRESETS.keys())[0])
+        ttk.Label(chapters_frame, text="Output template:").grid(row=4, column=0, sticky="w", padx=5, pady=2)
+        ttk.Entry(chapters_frame, textvariable=self.chapter_output_template, width=40).grid(row=4, column=1, sticky="w", padx=5)
+        self.chapter_output_template_menu = ttk.OptionMenu(
+            chapters_frame,
+            self.chapter_output_template_preset_var,
+            list(self.CHAPTER_OUTPUT_TEMPLATE_PRESETS.keys())[0],
+            *list(self.CHAPTER_OUTPUT_TEMPLATE_PRESETS.keys()),
+            command=self.apply_chapter_output_template_preset,
+        )
+        self.chapter_output_template_menu.grid(row=4, column=2, sticky="w", padx=5)
+        ttk.Button(chapters_frame, text="Save as preset...",
+                   command=self.save_chapter_output_template_preset).grid(row=4, column=3, sticky="w", padx=5)
         
         # Extra args area
         extra_frame = ttk.LabelFrame(self, text="Extra arguments")
@@ -1600,6 +1650,10 @@ class YTDLPGui(tk.Tk):
         if "output_template" in settings:
             self.output_template.set(settings.get("output_template", ""))
             self.output_template_preset_var.set("Custom")
+
+        if "chapter_output_template" in settings:
+            self.chapter_output_template.set(settings.get("chapter_output_template", ""))
+            self.chapter_output_template_preset_var.set("Custom")
 
         if "output_dir" in settings:
             self.output_dir_var.set(settings.get("output_dir", ""))
@@ -1867,20 +1921,39 @@ class YTDLPGui(tk.Tk):
             # Add explicit home path override for chapters
             opts += ["-P", f"home:{chapters_work_dir.replace('\\', '/')}"]
             
-            chapter_output_template = self.output_template.get().strip() or "%(title)s.%(ext)s"
+            chapter_output_template = self.chapter_output_template.get().strip() or "%(chapter_number)s_%(chapter_title)s_%(title)s.%(ext)s"
+            # Ensure the template uses forward slashes for yt-dlp compatibility
+            chapter_output_template = chapter_output_template.replace('\\', '/')
+
+            # ``--split-chapters`` exposes section_* placeholders for the split
+            # outputs. Keep backwards compatibility with existing presets that
+            # still use chapter_* placeholders by remapping them in split mode.
+            split_output_template = (
+                chapter_output_template
+                .replace("%(chapter_number)s", "%(section_number)s")
+                .replace("%(chapter_title)s", "%(section_title)s")
+            )
             
             if chapters_mode == "split":
                 # Split video into individual files per chapter
                 opts += ["--split-chapters"]
+                
+                # We use a fixed name for the main video file so we can reliably delete it
+                # after the splitting process is finished.
+                opts += ["-o", "TEMP_MAIN_FILE.%(ext)s"]
+                
+                # By using the 'chapter:' prefix, we tell yt-dlp to use this specific
+                # template ONLY for the split chapter files.
                 if use_folder:
-                    opts += ["-o", "%(title)s_chapters/" + chapter_output_template]
+                    opts += ["-o", f"chapter:%(title)s_chapters/{split_output_template}"]
                 else:
-                    opts += ["-o", chapter_output_template]
+                    opts += ["-o", f"chapter:{split_output_template}"]
                 
             elif chapters_mode == "individual":
                 # Download individual chapters as separate files using sections
                 if use_folder:
-                    chapter_output_template = os.path.join("%(title)s_chapters", chapter_output_template)
+                    # Construct path manually with forward slashes
+                    chapter_output_template = f"%(title)s_chapters/{chapter_output_template}"
                 
                 if chapters_selection == "range":
                     chapters_range = self.chapters_range_var.get().strip()
@@ -1894,11 +1967,14 @@ class YTDLPGui(tk.Tk):
                     if chapters_range:
                         opts += ["--download-sections", chapters_range]
                 else:
-                    # Download all chapters as individual sections
-                    opts += ["--download-sections", "*0-0"]
+                    # Download all chapters as individual sections.
+                    # yt-dlp treats ``--download-sections`` as a regex filter, so
+                    # ``.*`` matches every chapter title.
+                    opts += ["--download-sections", ".*"]
                 
-                # Set output template for chapter files with relative path
-                opts += ["-o", chapter_output_template.replace('\\', '/')]
+                # Use the chapter-specific output template so yt-dlp applies it
+                # to the per-chapter files instead of the main video output.
+                opts += ["-o", f"chapter:{chapter_output_template.replace('\\', '/')}"]
 
         # save for later (only basic fields).  we intentionally omit the
         # output template so that it remains blank on the next start.
@@ -1978,47 +2054,32 @@ class YTDLPGui(tk.Tk):
                 
                 if chapters_mode == "split":
                     try:
-                        # Find the merged file in _chapters subfolder
-                        merged_subfolder = None
+                        # In 'split' mode, yt-dlp first downloads the entire video as one file
+                        # (our TEMP_MAIN_FILE) and then splits it. We now clean up that temp file.
+                        for file in os.listdir(work_dir):
+                            if file.startswith("TEMP_MAIN_FILE."):
+                                file_path = os.path.join(work_dir, file)
+                                try:
+                                    os.remove(file_path)
+                                    self.log(f"Deleted temporary main file: {file}")
+                                except Exception as e:
+                                    self.log(f"Could not delete {file}: {e}")
+                        
+                        # Also check subfolders if the user had 'use subfolder' enabled, 
+                        # as yt-dlp might have placed residual files there.
                         for item in os.listdir(work_dir):
                             item_path = os.path.join(work_dir, item)
                             if os.path.isdir(item_path) and item.endswith("_chapters"):
-                                merged_subfolder = item_path
-                                # Delete merged file from _chapters subfolder
-                                for file in os.listdir(item_path):
-                                    if file.startswith("NA - NA"):
-                                        file_path = os.path.join(item_path, file)
+                                for sub_file in os.listdir(item_path):
+                                    if sub_file.startswith("TEMP_MAIN_FILE.") or sub_file.startswith("NA - NA"):
                                         try:
-                                            os.remove(file_path)
-                                            self.log(f"Deleted merged file: {file}")
-                                        except Exception as e:
-                                            self.log(f"Could not delete {file}: {e}")
+                                            os.remove(os.path.join(item_path, sub_file))
+                                            self.log(f"Deleted residual file from subfolder: {sub_file}")
+                                        except Exception:
+                                            pass
                         
-                        # If use_folder is True, move chapter files into the _chapters subfolder
-                        if use_folder and merged_subfolder:
-                            # Get video title from merged subfolder name
-                            video_title = os.path.basename(merged_subfolder).replace("_chapters", "")
-                            
-                            # Move all chapter files into the subfolder
-                            for file in os.listdir(work_dir):
-                                file_path = os.path.join(work_dir, file)
-                                if os.path.isfile(file_path) and not file.startswith("NA - NA"):
-                                    # Check if it's a chapter file (has chapter number pattern)
-                                    if video_title in file or any(c.isdigit() for c in file[:3]):
-                                        try:
-                                            dest_path = os.path.join(merged_subfolder, file)
-                                            shutil.move(file_path, dest_path)
-                                            self.log(f"Moved to subfolder: {file}")
-                                        except Exception as e:
-                                            self.log(f"Could not move {file}: {e}")
-                        
-                        # If use_folder is False, remove the empty _chapters subfolder
-                        elif not use_folder and merged_subfolder:
-                            try:
-                                os.rmdir(merged_subfolder)
-                                self.log(f"Deleted empty subfolder: {os.path.basename(merged_subfolder)}")
-                            except Exception as e:
-                                self.log(f"Could not delete subfolder: {e}")
+                        # Note: Moving files is no longer necessary because we pass the
+                        # subfolder path directly into the 'chapter:' output template.
                                 
                     except Exception as e:
                         self.log(f"Error during chapters organization: {e}")
