@@ -1,13 +1,13 @@
 {
   "yt_dlp_path": "yt-dlp.exe",
   "ask_overwrite": true,
-  "last_output_dir": "Output",
+  "last_output_dir": "C:/Users/flori/OneDrive/Musik/Podcasts",
   "preset_dirs": [
     "Presets",
     "H:\\AppDevelopment\\YT-DLP GUI\\Presets"
   ],
   "last_options": {
-    "format": "best",
+    "format": "mp3",
     "format_custom": "",
     "resolution": "best",
     "resolution_custom": "",
@@ -19,6 +19,7 @@
     "trim_start_mode": "Timestamp",
     "trim_end": "",
     "trim_end_mode": "Timestamp",
-    "sb_preset": "Custom Template"
+    "sb_preset": "Custom Template",
+    "preset": "Audio only"
   }
 }

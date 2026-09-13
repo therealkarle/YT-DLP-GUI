@@ -1035,15 +1035,28 @@ class YTDLPGui(tk.Tk):
                 return True
             if not os.path.isabs(filename):
                 filename = os.path.join(self.yt_dlp_runtime_dir(), filename)
-            if os.path.exists(filename):
-                self.log(f"Existing file detected: {filename}")
+            existing_files = [filename] if os.path.exists(filename) else []
+            is_audio_conversion = "--audio-format" in opts or "-x" in opts
+            if is_audio_conversion:
+                filename_root, _ = os.path.splitext(filename)
+                for extension in (".mp4", ".webm", ".mkv", ".m4a"):
+                    intermediate_file = filename_root + extension
+                    if os.path.exists(intermediate_file) and intermediate_file not in existing_files:
+                        existing_files.append(intermediate_file)
+                    stale_fixup_file = filename_root + ".temp" + extension
+                    if os.path.exists(stale_fixup_file) and stale_fixup_file not in existing_files:
+                        existing_files.append(stale_fixup_file)
+
+            if existing_files:
+                self.log(f"Existing file detected: {existing_files[0]}")
                 # custom dialog so we can control the button text
                 dlg = tk.Toplevel(self)
                 dlg.title("File exists")
                 dlg.transient(self)
                 dlg.grab_set()
 
-                msg = f"The file '{os.path.basename(filename)}' already exists."
+                names = ", ".join(os.path.basename(path) for path in existing_files)
+                msg = f"The file(s) '{names}' already exist."
                 lbl = tk.Label(dlg, text=msg, justify="left", wraplength=400)
                 lbl.pack(padx=10, pady=(10, 0))
 
@@ -1060,6 +1073,15 @@ class YTDLPGui(tk.Tk):
 
                 self.wait_window(dlg)
                 if result["proceed"]:
+                    for existing_file in existing_files:
+                        if existing_file == filename:
+                            continue
+                        try:
+                            os.remove(existing_file)
+                            self.log(f"Deleted old intermediate file: {existing_file}")
+                        except OSError as error:
+                            self.log(f"Could not delete old intermediate file: {error}")
+                            return False
                     # if the user explicitly wants to continue, make sure we
                     # tell yt-dlp to overwrite the existing file; the default
                     # behaviour is to skip already-downloaded content.

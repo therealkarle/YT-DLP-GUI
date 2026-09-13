@@ -1,0 +1,37 @@
+{
+  "type": "full",
+  "data": {
+    "format": "mp4",
+    "resolution": "1080",
+    "format_custom": "",
+    "resolution_custom": "",
+    "output_template": "%(title)s_%(uploader)s.%(ext)s",
+    "chapter_output_template": "%(chapter_number)s_%(chapter_title)s_%(title)s.%(ext)s",
+    "output_dir": "C:/Users/flori/OneDrive/Videobackup/YTDownloads",
+    "extra": "",
+    "playlist_yes": true,
+    "playlist_items": "",
+    "playlist_random": false,
+    "playlist_reverse": false,
+    "skip_errors": "",
+    "cookies_file": "",
+    "cookies_browser": "firefox",
+    "trim_enabled": false,
+    "trim_start_mode": "Timestamp",
+    "trim_start": "",
+    "trim_end_mode": "Timestamp",
+    "trim_end": "",
+    "chapters": false,
+    "chapters_mode": "split",
+    "chapters_selection": "all",
+    "chapters_range": "",
+    "chapters_use_folder": true,
+    "sb": {
+      "mark": "selfpromo,interaction,intro,outro,preview,hook,chapter",
+      "remove": "sponsor",
+      "title": "",
+      "api": "",
+      "enabled": true
+    }
+  }
+}
